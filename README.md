@@ -11,10 +11,10 @@ Darwinian Invention and Problem Solving*.
 
 ### Status
 
-Phases 1-4 are complete: the fixed-architecture base, the six
+Phases 1-5 are complete: the fixed-architecture base, the six
 architecture-altering operations, point-typed crossover, the
-architecture-altering run loop, and the design documentation are in
-place.
+architecture-altering run loop, the design documentation, and the
+optional synchronous island model are in place.
 
 - ADF kernel with an arbitrary architecture of
   **ADF0 … ADF(N-1) + RPB** (result-producing branch), where `N >= 0`.
@@ -41,6 +41,8 @@ place.
 - Structure-preserving crossover with point typing.
 - `run-architecture-altering-system` with the branch and argument
   duplication, creation, and deletion fractions used in Koza's run.
+- Optional island model with a two-dimensional torus, configurable deme
+  count, and best-individual migration at Koza's per-direction rate.
 - FiveAM test suite integrated with ASDF.
 
 ### Requirements
@@ -313,6 +315,33 @@ population serially. Initial generation uses deterministic per-individual
 seeds and serialized uniqueness resolution, so the same randomizer seed
 produces the same population regardless of the number of workers.
 
+### Island model
+
+Runs use one population by default. Set `*number-of-demes*` to a value
+greater than one to split the total population into semi-isolated demes.
+The total `size-of-population` must be divisible by `*number-of-demes*`.
+
+```lisp
+(let ((*number-of-demes* 64)
+      (*migration-rate* 0.08)
+      (*deme-topology* :torus))
+  (cl-koza-3.examples.even-5-parity-architecture-altering:run-example
+   :maximum-generations 76
+   :size-of-population 96000
+   :seed 1.0))
+```
+
+This is Koza's `D = 64`, `Q = 1500`, `B = 8%` configuration. On each
+generation after generation 0, the best `floor(B * Q)` individuals from
+each deme are copied to each torus neighbor, replacing the worst
+individuals in the destination. Migration uses a synchronous
+generation-boundary schedule; Koza's original transputer run was
+asynchronous.
+
+`:torus` requires a square number of demes. The migration rate is the
+fraction sent in each of the four directions, not a total budget split
+across directions.
+
 ### Example: even-5-parity with three ADFs
 
 The `even-5-parity-3-adfs` example keeps the same fitness cases and Boolean
@@ -438,7 +467,38 @@ The parameter definer uses Koza's fractions: 74% crossover, 10%
 reproduction, 0% mutation, 5% branch duplication, 5% argument duplication,
 0.5% branch deletion, 0.5% argument deletion, 5% branch creation, and 0%
 argument creation. The run report prints these fractions alongside the
-standard GP parameters.
+standard GP parameters. `run` and `run-example` also accept
+`:number-of-demes` and `:migration-rate`; see the island-model section above
+for Koza's 64-deme configuration.
+
+### Experimental result: Koza's 64-deme run
+
+One run with seed `1.0`, `64` demes of `1,500` individuals, and an `8%`
+migration rate solved even-5-parity:
+
+- best-of-run generation: `9`
+- standardized fitness: `0.0`
+- hits: `32 / 32`
+- best architecture: `ADF0` with 3 arguments and `ADF1` with 4 arguments
+- wall-clock run time: `58.2 s`
+- maximum resident memory: approximately `929 MB`
+
+Final population architecture distribution:
+
+| ADFs | Individuals |
+| ---: | ---: |
+| 0 | 19 |
+| 1 | 3,942 |
+| 2 | 56,509 |
+| 3 | 29,311 |
+| 4 | 5,661 |
+| 5 | 539 |
+| 6 | 19 |
+
+For comparison, the single-population run with `1,000` individuals and the
+same seed reached standardized fitness `8.0` with `24` hits and did not
+solve the problem. This is a single-run illustration, not a statistical
+estimate of success probability.
 
 ### Tests
 
@@ -451,7 +511,7 @@ The test suite uses FiveAM and is registered as `cl-koza-3/tests`:
 At the time of writing the suite reports:
 
 ```text
-Pass: 3116 (99%)
+Pass: 3142 (99%)
 Skip: 2 ( 0%)
 Fail: 0 ( 0%)
 ```
@@ -475,6 +535,8 @@ The two skipped tests document known issues:
   probabilities and reporting.
 - **Phase 4 (done):** design documentation and the architecture-altering
   example.
+- **Phase 5 (done):** optional synchronous island model with torus
+  migration and Koza's 64-deme configuration.
 
 ### Project layout
 

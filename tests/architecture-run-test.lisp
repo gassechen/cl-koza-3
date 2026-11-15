@@ -128,3 +128,75 @@
         (is (= 3
                (adf-program-branch-count
                 (individual-program (aref population index)))))))))
+
+(defun make-island-program (index)
+  (make-adf-program
+   :adfs nil
+   :rpb (ecase index
+          (0 '(and d0 d1))
+          (1 '(or d0 d1))
+          (2 '(not d0))
+          (3 '(nand d0 d1)))
+   :branch-info
+   (vector
+    (make-test-branch-info
+     :rpb :rpb 0 nil
+     :function-set '(and or not nand)
+     :function-argument-map '(2 2 1 2)
+     :terminal-set '(:d0 :d1)))))
+
+(defun make-island-demes ()
+  (let ((demes (make-array 4)))
+    (dotimes (deme-index 4)
+      (let ((population (make-array 5)))
+        (dotimes (rank 5)
+          (setf (aref population rank)
+                (make-individual
+                 :program (make-island-program deme-index)
+                 :standardized-fitness (1+ rank)
+                 :hits (- 5 rank))))
+        (cl-koza-3.kernel::normalize-fitness-of-population population)
+        (cl-koza-3.kernel::sort-population-by-fitness population)
+        (setf (aref demes deme-index) population)))
+    demes))
+
+(test migrate-demes-replaces-worst-with-torus-neighbor-best
+  (let ((*migration-rate* 0.2)
+        (demes (make-island-demes)))
+    (cl-koza-3.kernel::migrate-demes demes)
+    (let ((programs
+            (loop for rank below 5
+                  collect (adf-program-rpb
+                           (individual-program
+                            (aref (aref demes 0) rank))))))
+      (is (= 3 (count '(and d0 d1) programs :test #'equal)))
+      (is (= 1 (count '(or d0 d1) programs :test #'equal)))
+      (is (= 1 (count '(not d0) programs :test #'equal))))))
+
+(test validate-deme-parameters-rejects-invalid-island-settings
+  (let ((*number-of-demes* 4)
+        (*migration-rate* 0.0))
+    (signals error
+      (cl-koza-3.kernel::validate-deme-parameters 10)))
+  (let ((*number-of-demes* 3)
+        (*migration-rate* 0.1)
+        (*deme-topology* :torus))
+    (signals error
+      (cl-koza-3.kernel::validate-deme-parameters 30))))
+
+(test run-architecture-altering-system-with-demes
+  (let ((*parallel-evaluation-p* nil)
+        (*parallel-generation-p* nil)
+        (*seed* 12345.0d0)
+        (*verbose* nil)
+        (*number-of-demes* 4)
+        (*migration-rate* 0.2))
+    (multiple-value-bind (population fitness-cases)
+        (run-architecture-altering-system
+         'architecture-run-problem 1.0 2 20)
+      (declare (ignore fitness-cases))
+      (is (= 20 (length population)))
+      (dotimes (index (length population))
+        (is (= 2
+               (adf-program-branch-count
+                (individual-program (aref population index)))))))))

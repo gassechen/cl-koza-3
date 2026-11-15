@@ -79,6 +79,9 @@
    #:*tournament-size*
    #:*parallel-evaluation-p*
    #:*parallel-generation-p*
+   #:*number-of-demes*
+   #:*migration-rate*
+   #:*deme-topology*
    #:*best-of-run-individual*
    #:*generation-of-best-of-run-individual*
    #:run-genetic-programming-system
@@ -145,6 +148,9 @@
    #:*tournament-size*
    #:*parallel-evaluation-p*
    #:*parallel-generation-p*
+   #:*number-of-demes*
+   #:*migration-rate*
+   #:*deme-topology*
    #:*best-of-run-individual*
    #:*generation-of-best-of-run-individual*
    #:run-genetic-programming-system

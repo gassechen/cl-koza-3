@@ -141,8 +141,16 @@
           'define-parameters-for-even-5-parity
           'define-termination-criterion-for-even-5-parity))
 
-(defun run (maximum-generations size-of-population seed &key verbose)
-  (let ((*verbose* verbose))
+(defun run (maximum-generations
+            size-of-population
+            seed
+            &key
+              verbose
+              (number-of-demes *number-of-demes*)
+              (migration-rate *migration-rate*))
+  (let ((*verbose* verbose)
+        (*number-of-demes* number-of-demes)
+        (*migration-rate* migration-rate))
     (run-architecture-altering-system
      'even-5-parity-architecture-altering
      seed
@@ -153,5 +161,12 @@
                       (maximum-generations 76)
                       (size-of-population 1000)
                       (seed 1.0)
-                      (verbose nil))
-  (run maximum-generations size-of-population seed :verbose verbose))
+                      (verbose nil)
+                      (number-of-demes *number-of-demes*)
+                      (migration-rate *migration-rate*))
+  (run maximum-generations
+       size-of-population
+       seed
+       :verbose verbose
+       :number-of-demes number-of-demes
+       :migration-rate migration-rate))

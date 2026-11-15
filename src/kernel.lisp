@@ -51,6 +51,21 @@
 (defvar *parallel-generation-p* t
   "When non-NIL, create the initial population with lparallel.")
 
+(defvar *number-of-demes* 1
+  "Number of semi-isolated subpopulations.  The total population size
+   must be evenly divisible by this value.  A value of 1 selects the
+   ordinary single-population run.")
+
+(defvar *migration-rate* 0.0
+  "Fraction of each deme sent to each neighboring deme on every
+   generation.  This is Koza's boatload size B, expressed as a fraction
+   of the deme size.")
+
+(defvar *deme-topology* :torus
+  "Migration topology for island-model runs.  Currently only :TORUS is
+   supported; the number of demes must be a perfect square when
+   migration is enabled.")
+
 (defstruct individual
   program
   (standardized-fitness 0)
@@ -95,6 +110,53 @@
   (assert (and (numberp seed) (not (zerop seed))) (seed)
           "The randomizer seed must be a non-zero number."))
 
+(defun square-integer-p (number)
+  (let ((root (isqrt number)))
+    (= number (* root root))))
+
+(defun validate-deme-parameters (size-of-population)
+  "Validates the island-model parameters for a run of
+   SIZE-OF-POPULATION individuals."
+  (let ((number-of-demes *number-of-demes*)
+        (migration-rate *migration-rate*))
+    (assert (and (integerp number-of-demes)
+                 (plusp number-of-demes))
+            (number-of-demes)
+            "*Number-Of-Demes* must be a positive integer, not ~S"
+            number-of-demes)
+    (assert (and (realp migration-rate)
+                 (<= 0 migration-rate)
+                 (< migration-rate 1))
+            (migration-rate)
+            "*Migration-Rate* must be in [0, 1), not ~S"
+            migration-rate)
+    (when (> number-of-demes 1)
+      (assert (zerop (mod size-of-population number-of-demes))
+              (size-of-population number-of-demes)
+              "Size-Of-Population ~D must be divisible by *Number-Of-Demes* ~D."
+              size-of-population number-of-demes))
+    (when (plusp migration-rate)
+      (assert (> number-of-demes 1)
+              (migration-rate)
+              "*Migration-Rate* must be zero when there is only one deme.")
+      (unless (eq *deme-topology* :torus)
+        (error "*Deme-Topology* must be :TORUS, not ~S."
+               *deme-topology*))
+      (unless (square-integer-p number-of-demes)
+        (error "A :TORUS requires a square number of demes, not ~D."
+               number-of-demes))
+      (let* ((deme-size (/ size-of-population number-of-demes))
+             (migrants (floor (* migration-rate deme-size)))
+             (neighbors (deme-neighbors 0 number-of-demes)))
+        (when (zerop migrants)
+          (error "Migration rate ~S produces zero migrants for deme size ~D."
+                 migration-rate deme-size))
+        (when (> (* migrants (length neighbors)) deme-size)
+          (error "Migration would replace ~D individuals in a deme of size ~D."
+                 (* migrants (length neighbors))
+                 deme-size))))
+    number-of-demes))
+
 (defun ensure-parallel-kernel ()
   "Creates the lparallel kernel if it does not already exist."
   (unless lparallel:*kernel*
@@ -112,6 +174,27 @@
                         (* (1+ index) 2654435761))
                      limit)))
     (coerce (1+ mixed) 'double-float)))
+
+(defun deme-grid-side (number-of-demes)
+  (isqrt number-of-demes))
+
+(defun deme-neighbors (deme-index number-of-demes)
+  "Returns the indices of the north, south, east, and west neighbors of
+   DEME-INDEX on a two-dimensional torus.  Duplicate neighbors are
+   removed so that tiny grids do not receive the same deme twice."
+  (let* ((side (deme-grid-side number-of-demes))
+         (row (floor deme-index side))
+         (column (mod deme-index side))
+         (north (mod (1- row) side))
+         (south (mod (1+ row) side))
+         (west (mod (1- column) side))
+         (east (mod (1+ column) side)))
+    (remove-duplicates
+     (list (+ (* north side) column)
+           (+ (* south side) column)
+           (+ (* row side) west)
+           (+ (* row side) east))
+     :test #'=)))
 
 (defun initialize-run (seed)
   (setf *seed* (coerce seed 'double-float))
@@ -317,28 +400,49 @@
   (multiple-value-bind (adf-branches rpb-branch)
       (resolve-branch-specs adf-specs rpb-spec)
     (funcall parameter-definer)
+    (validate-deme-parameters size-of-population)
     (describe-parameters-for-run maximum-generations
                                  size-of-population
                                  (length adf-branches))
     (resolve-terminal-sets adf-branches rpb-branch)
-    (let ((population
-            (create-population-with-branches size-of-population
-                                             adf-branches
-                                             rpb-branch
-                                             seeded-programs)))
-      (let ((fitness-cases (funcall fitness-cases-creator))
-            (new-programs (make-array size-of-population)))
-        (execute-generations population
-                             new-programs
-                             fitness-cases
-                             maximum-generations
-                             fitness-function
-                             termination-predicate
-                             adf-branches
-                             rpb-branch
-                             breeding-function)
-        (report-on-run)
-        (values population fitness-cases)))))
+    (let ((fitness-cases (funcall fitness-cases-creator)))
+      (if (= *number-of-demes* 1)
+          (let ((population
+                  (create-population-with-branches size-of-population
+                                                   adf-branches
+                                                   rpb-branch
+                                                   seeded-programs))
+                (new-programs (make-array size-of-population)))
+            (execute-generations population
+                                 new-programs
+                                 fitness-cases
+                                 maximum-generations
+                                 fitness-function
+                                 termination-predicate
+                                 adf-branches
+                                 rpb-branch
+                                 breeding-function)
+            (report-on-run)
+            (values population fitness-cases))
+          (let* ((number-of-demes *number-of-demes*)
+                 (deme-size (/ size-of-population number-of-demes))
+                 (demes (create-deme-populations number-of-demes
+                                                 deme-size
+                                                 adf-branches
+                                                 rpb-branch
+                                                 seeded-programs))
+                 (new-programs (make-array deme-size)))
+            (execute-island-generations demes
+                                        new-programs
+                                        fitness-cases
+                                        maximum-generations
+                                        fitness-function
+                                        termination-predicate
+                                        adf-branches
+                                        rpb-branch
+                                        breeding-function)
+            (report-on-run)
+            (values (flatten-demes demes) fitness-cases))))))
 
 (defun report-on-run ()
   "Prints out the best-of-run individual."
@@ -392,6 +496,13 @@
   (format t "~%Size of Population:~50T~D" size-of-population)
   (when number-of-adfs
     (format t "~%Number of ADFs:~50T~D" number-of-adfs))
+  (when (> *number-of-demes* 1)
+    (format t "~%Number of demes:~50T~D" *number-of-demes*)
+    (format t "~%Size of each deme:~50T~D"
+            (/ size-of-population *number-of-demes*))
+    (format t "~%Deme topology:~50T~A" *deme-topology*)
+    (format t "~%Migration rate per direction:~50T~D"
+            *migration-rate*))
   (format t "~%Maximum depth of new individuals:~50T~D"
           *max-depth-for-new-individuals*)
   (format t "~%Maximum depth of new subtrees for mutants:~50T~D"
@@ -634,6 +745,33 @@
       (setf *seed* last-state))
     population)))
 
+(defun create-deme-populations (number-of-demes
+                                deme-size
+                                adf-branches
+                                rpb-branch
+                                seeded-programs)
+  "Creates NUMBER-OF-DEMES populations of DEME-SIZE individuals.
+   SEEDED-PROGRAMS are placed in the first deme only."
+  (let ((demes (make-array number-of-demes)))
+    (dotimes (deme-index number-of-demes)
+      (setf (aref demes deme-index)
+            (create-population-with-branches
+             deme-size
+             adf-branches
+             rpb-branch
+             (if (zerop deme-index) seeded-programs nil))))
+    demes))
+
+(defun flatten-demes (demes)
+  "Returns all individuals in DEMES as one vector."
+  (let* ((number-of-demes (length demes))
+         (deme-size (length (aref demes 0)))
+         (population (make-array (* number-of-demes deme-size))))
+    (dotimes (deme-index number-of-demes population)
+      (replace population
+               (aref demes deme-index)
+               :start1 (* deme-index deme-size)))))
+
 (defun create-population (size-of-population
                           adf0-function-set adf0-argument-map
                           adf0-terminal-set
@@ -706,6 +844,122 @@
               current-generation)))
     (when *verbose*
       (report-on-generation current-generation population))))
+
+(defun best-individual-in-demes (demes)
+  "Returns the best individual across DEMES.  Each deme is assumed to
+   be sorted in descending order of normalized fitness."
+  (loop with best = (aref (aref demes 0) 0)
+        for deme-index from 1 below (length demes)
+        for candidate = (aref (aref demes deme-index) 0)
+        when (> (individual-standardized-fitness
+                 (aref (aref demes deme-index) 0))
+                (individual-standardized-fitness best))
+          do (setf best candidate)
+        finally (return best)))
+
+(defun migrate-demes (demes)
+  "Migrates the best individuals from each deme to its four torus
+   neighbors, replacing the worst individuals in each destination.
+   DEMES must be sorted in descending order of normalized fitness."
+  (let* ((number-of-demes (length demes))
+         (deme-size (length (aref demes 0)))
+         (migrants (floor (* *migration-rate* deme-size))))
+    (when (plusp migrants)
+      (let ((emigrants (make-array number-of-demes)))
+        (dotimes (deme-index number-of-demes)
+          (setf (aref emigrants deme-index)
+                (loop for rank below migrants
+                      collect (copy-individual
+                               (aref (aref demes deme-index) rank)))))
+        (dotimes (deme-index number-of-demes)
+          (let* ((population (aref demes deme-index))
+                 (incoming
+                   (loop for source in (deme-neighbors
+                                        deme-index number-of-demes)
+                         append
+                         (loop for emigrant in (aref emigrants source)
+                               collect (copy-individual emigrant))))
+                 (incoming-count (length incoming)))
+            (when (> incoming-count deme-size)
+              (error "Migration would replace ~D individuals in a deme of size ~D."
+                     incoming-count deme-size))
+            (loop for offset from 0
+                  for immigrant in incoming
+                  do (setf (aref population
+                                 (- deme-size 1 offset))
+                           immigrant))
+            (normalize-fitness-of-population population)
+            (sort-population-by-fitness population)))))
+    demes))
+
+(defun report-on-island-generation (generation-number demes)
+  "Prints the best individual across all demes at GEN generation."
+  (let ((sum 0.0)
+        (count 0)
+        (best (best-individual-in-demes demes))
+        (*print-pretty* t))
+    (dotimes (deme-index (length demes))
+      (dotimes (individual-index (length (aref demes deme-index)))
+        (incf sum
+              (individual-standardized-fitness
+               (aref (aref demes deme-index) individual-index)))
+        (incf count)))
+    (format t "~2%Generation ~D:  Average standardized-fitness = ~S.~
+               ~%The best individual program of the population had a~
+               ~%standardized fitness measure of ~D and ~D hit~P.~
+               ~%It was: ~%~S"
+            generation-number (/ sum count)
+            (individual-standardized-fitness best)
+            (individual-hits best)
+            (individual-hits best)
+            (individual-program best))))
+
+(defun execute-island-generations (demes
+                                   new-programs
+                                   fitness-cases
+                                   maximum-generations
+                                   fitness-function
+                                   termination-predicate
+                                   adf-branches
+                                   rpb-branch
+                                   &optional (breeding-function
+                                               #'breed-new-population))
+  "Loops over DEMES until the user's termination predicate says to
+   stop.  Migration occurs before breeding on every generation after
+   generation 0."
+  (do ((current-generation 0 (+ 1 current-generation)))
+      ((let ((best-of-generation (best-individual-in-demes demes)))
+         (funcall termination-predicate
+                  current-generation
+                  maximum-generations
+                  (individual-standardized-fitness best-of-generation)
+                  (individual-hits best-of-generation))))
+    (when (> current-generation 0)
+      (migrate-demes demes)
+      (dotimes (deme-index (length demes))
+        (funcall breeding-function
+                 (aref demes deme-index)
+                 new-programs
+                 adf-branches
+                 rpb-branch)))
+    (dotimes (deme-index (length demes))
+      (let ((population (aref demes deme-index)))
+        (zeroize-fitness-measures-of-population population)
+        (evaluate-fitness-of-population population fitness-cases
+                                        fitness-function)
+        (normalize-fitness-of-population population)
+        (sort-population-by-fitness population)))
+    (let ((best-of-generation (best-individual-in-demes demes)))
+      (when (or (not *best-of-run-individual*)
+                (> (individual-standardized-fitness
+                    *best-of-run-individual*)
+                   (individual-standardized-fitness best-of-generation)))
+        (setf *best-of-run-individual*
+              (copy-individual best-of-generation))
+        (setf *generation-of-best-of-run-individual*
+              current-generation)))
+    (when *verbose*
+      (report-on-island-generation current-generation demes))))
 
 (defun zeroize-fitness-measures-of-population (population)
   "Cleans out the statistics in each individual in the population."

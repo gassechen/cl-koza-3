@@ -179,13 +179,70 @@ The run uses Koza's minimalist initial architecture for even-5-parity: one
 two-argument `ADF0` plus the result-producing branch. Branch creation can
 grow additional ADFs from either `ADF0` or the result-producing branch.
 
-The current implementation uses a single population. It does not implement
-Koza's 64-deme island model; `lparallel` is used for fitness evaluation and
-initial-population generation, not for distributed demes.
+## Island model
+
+Runs use a single population when `*number-of-demes*` is `1`. For an
+island-model run, set `*number-of-demes*` to a value greater than one and
+set the total population size to a multiple of the deme count. The kernel
+derives the deme size as `size-of-population / *number-of-demes*`.
+
+Migration is controlled by `*migration-rate*`, Koza's boatload fraction
+`B`. On every generation after generation 0, the best
+`floor(B * deme-size)` individuals in each deme are copied to each neighbor
+on a two-dimensional torus, replacing the worst individuals in the
+destination. Destination fitness is renormalized and sorted before
+breeding. A migration rate of `0.08` therefore sends 8% of a deme in each
+of the four directions.
+
+Koza's configuration for the architecture-altering even-5-parity run is:
+
+```lisp
+(let ((*number-of-demes* 64)
+      (*migration-rate* 0.08)
+      (*deme-topology* :torus))
+  (run-architecture-altering-system ... 96000))
+```
+
+This gives 64 demes of 1,500 individuals and 120 migrants per direction.
+`:torus` requires a perfect-square deme count. Tiny torus grids can have
+duplicate north/south or east/west neighbors; those neighbors are
+deduplicated.
+
+Migration happens at synchronous generation boundaries. Koza's original
+implementation ran the demes asynchronously on a transputer mesh, so the
+migration schedule is not bit-for-bit identical even though the topology,
+deme sizes, and per-direction boatload match.
+
+## Observed 64-deme run
+
+A run with seed `1.0`, 64 demes of 1,500 individuals, an 8% migration rate,
+and the example's operation fractions solved even-5-parity at generation 9
+with standardized fitness `0.0` and `32/32` hits. The best individual had
+two ADFs: `ADF0` with three arguments and `ADF1` with four arguments. The
+run took about 58 seconds of wall-clock time and used about 929 MB of
+resident memory.
+
+The final population contained:
+
+| ADFs | Individuals |
+| ---: | ---: |
+| 0 | 19 |
+| 1 | 3,942 |
+| 2 | 56,509 |
+| 3 | 29,311 |
+| 4 | 5,661 |
+| 5 | 539 |
+| 6 | 19 |
+
+The corresponding single-population run with 1,000 individuals and the same
+seed reached standardized fitness `8.0` with 24 hits. The comparison is a
+single-run illustration, not an estimate of success probability.
 
 ## Selected deviations and limitations
 
 - All point types are Boolean in the current examples.
+- The island model uses synchronous generation-boundary migration; Koza's
+  original even-5-parity runs used asynchronous demes on a transputer mesh.
 - Architecture operation placement in each generation follows the existing
   kernel's deterministic fraction-window style rather than an independent
   random draw for every individual. The configured fractions therefore

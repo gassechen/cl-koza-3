@@ -200,3 +200,132 @@
         (is (= 2
                (adf-program-branch-count
                 (individual-program (aref population index)))))))))
+
+(test architecture-breeding-applies-adi-creation
+  (let* ((program (make-one-adf-program))
+         (population (make-breeding-population program 4))
+         (*branch-duplication-fraction* 0.0)
+         (*argument-duplication-fraction* 0.0)
+         (*branch-deletion-fraction* 0.0)
+         (*argument-deletion-fraction* 0.0)
+         (*branch-creation-fraction* 0.0)
+         (*argument-creation-fraction* 0.0)
+         (*adi-creation-fraction* 1.0)
+         (*adi-deletion-fraction* 0.0))
+    (call-architecture-breeder population)
+    (dotimes (index (length population))
+      (let ((new-program
+              (individual-program (aref population index))))
+        (is (= 1 (adf-program-adi-count new-program)))
+        (is (member :adi0 (branch-names new-program)))))))
+
+(test architecture-breeding-applies-adi-deletion
+  (let* ((program (make-adi-architecture-program))
+         (population (make-breeding-population program 4))
+         (*branch-duplication-fraction* 0.0)
+         (*argument-duplication-fraction* 0.0)
+         (*branch-deletion-fraction* 0.0)
+         (*argument-deletion-fraction* 0.0)
+         (*branch-creation-fraction* 0.0)
+         (*argument-creation-fraction* 0.0)
+         (*adi-creation-fraction* 0.0)
+         (*adi-deletion-fraction* 1.0))
+    (call-architecture-breeder population)
+    (dotimes (index (length population))
+      (let ((new-program
+              (individual-program (aref population index))))
+        (is (zerop (adf-program-adi-count new-program)))
+        (is (not (member :adi0 (branch-names new-program))))))))
+
+(defun define-adi-architecture-run-parameters ()
+  (setf *number-of-fitness-cases* 6)
+  (setf *max-depth-for-new-individuals* 5)
+  (setf *max-depth-for-new-subtrees-in-mutants* 4)
+  (setf *max-depth-for-individuals-after-crossover* 17)
+  (setf *method-of-selection* :tournament)
+  (setf *tournament-size* 2)
+  (setf *method-of-generation* :ramped-half-and-half)
+  (setf *fitness-proportionate-reproduction-fraction* 0.0)
+  (setf *crossover-at-any-point-fraction* 0.0)
+  (setf *crossover-at-function-point-fraction* 0.0)
+  (setf *branch-duplication-fraction* 0.0)
+  (setf *argument-duplication-fraction* 0.0)
+  (setf *branch-deletion-fraction* 0.0)
+  (setf *argument-deletion-fraction* 0.0)
+  (setf *branch-creation-fraction* 0.0)
+  (setf *argument-creation-fraction* 0.0)
+  (setf *adi-deletion-fraction* 0.0)
+  (setf *adi-creation-fraction* 1.0)
+  (values))
+
+(defun define-adi-deletion-architecture-run-parameters ()
+  (define-adi-architecture-run-parameters)
+  (setf *adi-deletion-fraction* 1.0)
+  (setf *adi-creation-fraction* 0.0)
+  (values))
+
+(defun adi-architecture-run-problem ()
+  (multiple-value-bind (adf-specs
+                        adi-specs
+                        rpb-spec
+                        fitness-cases-creator
+                        fitness-function
+                        parameter-definer
+                        termination-predicate)
+      (cl-koza-3.examples.adi-sequence-sum:adi-sequence-sum)
+    (declare (ignore parameter-definer))
+    (values adf-specs
+            adi-specs
+            rpb-spec
+            fitness-cases-creator
+            fitness-function
+            'define-adi-architecture-run-parameters
+            termination-predicate)))
+
+(defun adi-deletion-architecture-run-problem ()
+  (multiple-value-bind (adf-specs
+                        adi-specs
+                        rpb-spec
+                        fitness-cases-creator
+                        fitness-function
+                        parameter-definer
+                        termination-predicate)
+      (cl-koza-3.examples.adi-sequence-sum:adi-sequence-sum)
+    (declare (ignore parameter-definer))
+    (values adf-specs
+            adi-specs
+            rpb-spec
+            fitness-cases-creator
+            fitness-function
+            'define-adi-deletion-architecture-run-parameters
+            termination-predicate)))
+
+(test run-adi-architecture-altering-system-creates-adis
+  (let ((*parallel-evaluation-p* nil)
+        (*parallel-generation-p* nil)
+        (*seed* 12345.0d0)
+        (*verbose* nil))
+    (multiple-value-bind (population fitness-cases)
+        (run-adi-architecture-altering-system
+         'adi-architecture-run-problem 1.0 1 4)
+      (declare (ignore fitness-cases))
+      (is (= 4 (length population)))
+      (dotimes (index (length population))
+        (is (= 2
+               (adf-program-adi-count
+                (individual-program (aref population index)))))))))
+
+(test run-adi-architecture-altering-system-deletes-adis
+  (let ((*parallel-evaluation-p* nil)
+        (*parallel-generation-p* nil)
+        (*seed* 12345.0d0)
+        (*verbose* nil))
+    (multiple-value-bind (population fitness-cases)
+        (run-adi-architecture-altering-system
+         'adi-deletion-architecture-run-problem 1.0 1 4)
+      (declare (ignore fitness-cases))
+      (is (= 4 (length population)))
+      (dotimes (index (length population))
+        (is (zerop
+             (adf-program-adi-count
+              (individual-program (aref population index)))))))))

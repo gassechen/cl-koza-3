@@ -481,3 +481,159 @@
                (adf-program-adi new-program 0)))
     (is (equal '(+ arg0 item)
                (adf-program-adi receiving 0)))))
+
+(defun make-two-adi-architecture-program ()
+  (let* ((adf-info
+           (make-test-branch-info
+            :adf0 :adf 2 '(:arg0 :arg1)
+            :function-set '(+) :function-argument-map '(2)
+            :function-types '((+ :number :number :number))
+            :terminal-set '(:arg0 :arg1)
+            :terminal-types '((:arg0 . :number) (:arg1 . :number))
+            :result-type :number))
+         (adi0-info
+           (make-branch-info
+            :name :adi0 :kind :adi :arity 1 :formals '(:arg0)
+            :function-set '(+) :function-argument-map '(2)
+            :function-types '((+ :number :number :number))
+            :terminal-set '(:arg0 :item :index)
+            :terminal-types '((:arg0 . :number) (:item . :number)
+                              (:index . :number))
+            :result-type :number
+            :iteration-source :data
+            :iteration-variable :item
+            :iteration-index-variable :index))
+         (adi1-info
+           (make-branch-info
+            :name :adi1 :kind :adi :arity 1 :formals '(:arg0)
+            :function-set '(+) :function-argument-map '(2)
+            :function-types '((+ :number :number :number))
+            :terminal-set '(:arg0 :item :index)
+            :terminal-types '((:arg0 . :number) (:item . :number)
+                              (:index . :number))
+            :result-type :number
+            :iteration-source :data
+            :iteration-variable :item
+            :iteration-index-variable :index))
+         (rpb-info
+           (make-branch-info
+            :name :rpb :kind :rpb :arity 0 :formals nil
+            :function-set '(adi0 adi1) :function-argument-map '(1 1)
+            :function-types '((adi0 :number :number)
+                              (adi1 :number :number))
+            :terminal-set '(:d0)
+            :terminal-types '((:d0 . :number))
+            :result-type :number)))
+    (make-adf-program
+     :adfs '((+ arg0 arg1))
+     :adis '((+ arg0 item) (+ arg0 item))
+     :rpb '(adi1 (adi0 0))
+     :branch-info (vector adf-info adi0-info adi1-info rpb-info))))
+
+(test adi-creation-adds-first-adi-and-preserves-semantics
+  (let* ((adf-info
+           (make-test-branch-info
+            :adf0 :adf 2 '(:arg0 :arg1)
+            :function-set '(+) :function-argument-map '(2)
+            :function-types '((+ :number :number :number))
+            :terminal-set '(:arg0 :arg1)
+            :terminal-types '((:arg0 . :number) (:arg1 . :number))
+            :result-type :number))
+         (rpb-info
+           (make-test-branch-info
+            :rpb :rpb 0 nil
+            :function-set '(adf0 +) :function-argument-map '(2 2)
+            :function-types '((adf0 :number :number :number)
+                              (+ :number :number :number))
+            :terminal-set '(:d0 :d1)
+            :terminal-types '((:d0 . :number) (:d1 . :number))
+            :result-type :number
+            :allowed-branch-indices '(0)))
+         (program (make-adf-program
+                   :adfs '((+ arg0 arg1))
+                   :adis nil
+                   :rpb '(adf0 d0 d1)
+                   :branch-info (vector adf-info rpb-info)))
+         (new-program
+           (with-architecture-test-seed
+             (adi-creation program :branch :rpb :point 0 :body 'arg0)))
+         (adi-info (program-branch-info new-program :adi0))
+         (new-rpb-info (program-branch-info new-program :rpb))
+         (environment '((:data . (1 2 3)) (:d0 . 2) (:d1 . 3))))
+    (is (= 1 (adf-program-adi-count new-program)))
+    (is (equal '(:adf0 :adi0 :rpb)
+               (branch-names new-program)))
+    (is (equal (list :adi0 '(adf0 d0 d1))
+               (adf-program-rpb new-program)))
+    (is (equal 'arg0 (adf-program-adi new-program 0)))
+    (is (= 1 (branch-info-arity adi-info)))
+    (is (equal '(:arg0) (branch-info-formals adi-info)))
+    (is (eq :number (branch-info-result-type adi-info)))
+    (is (eq :data (branch-info-iteration-source adi-info)))
+    (is (eq :item (branch-info-iteration-variable adi-info)))
+    (is (eq :index (branch-info-iteration-index-variable adi-info)))
+    (is (test-function-present-p new-rpb-info "ADI0"))
+    (is (= 1 (test-function-arity new-rpb-info "ADI0")))
+    (is (= (evaluate-adf-program program :environment environment)
+           (evaluate-adf-program new-program :environment environment)))))
+
+(test adi-creation-inherits-iteration-metadata
+  (let* ((program (make-adi-architecture-program))
+         (new-program
+           (with-architecture-test-seed
+             (adi-creation program :branch :rpb :point 0 :body 'arg0)))
+         (adi-info (program-branch-info new-program :adi1))
+         (environment '((:data . (1 2 3)))))
+    (is (= 2 (adf-program-adi-count new-program)))
+    (is (eq :adi1 (first (adf-program-rpb new-program))))
+    (is (equal '((adi0 0)) (rest (adf-program-rpb new-program))))
+    (is (equal 'arg0 (adf-program-adi new-program 1)))
+    (is (equal '(adf0 arg0 item)
+               (adf-program-adi new-program 0)))
+    (is (= 1 (branch-info-arity adi-info)))
+    (is (eq :number (branch-info-result-type adi-info)))
+    (is (eq :data (branch-info-iteration-source adi-info)))
+    (is (eq :item (branch-info-iteration-variable adi-info)))
+    (is (eq :index (branch-info-iteration-index-variable adi-info)))
+    (is (= (evaluate-adf-program program :environment environment)
+           (evaluate-adf-program new-program :environment environment)))))
+
+(test adi-deletion-renumbers-later-adis
+  (let* ((program (make-two-adi-architecture-program))
+         (new-program
+           (with-architecture-test-seed
+             (adi-deletion program :branch :adi0)))
+         (adi-info (program-branch-info new-program :adi0))
+         (rpb-info (program-branch-info new-program :rpb)))
+    (is (= 1 (adf-program-adi-count new-program)))
+    (is (equal '(:adf0 :adi0 :rpb)
+               (branch-names new-program)))
+    (is (string= "ADI0"
+                 (symbol-name (first (adf-program-rpb new-program)))))
+    (is (not (test-tree-contains-name-p
+              (adf-program-rpb new-program) "ADI1")))
+    (is (equal '(+ arg0 item)
+               (adf-program-adi new-program 0)))
+    (is (eq :adi0 (branch-info-name adi-info)))
+    (is (not (test-function-present-p rpb-info "ADI1")))
+    (is (test-function-present-p rpb-info "ADI0"))
+    (is (numberp
+         (evaluate-adf-program
+          new-program
+          :environment '((:data . (1 2 3)) (:d0 . 0)))))))
+
+(test adi-deletion-last-adi-removes-branch
+  (let* ((program (make-adi-architecture-program))
+         (new-program
+           (with-architecture-test-seed
+             (adi-deletion program :branch :adi0)))
+         (rpb-info (program-branch-info new-program :rpb)))
+    (is (zerop (adf-program-adi-count new-program)))
+    (is (equal '(:adf0 :rpb) (branch-names new-program)))
+    (is (not (test-tree-contains-name-p
+              (adf-program-rpb new-program) "ADI0")))
+    (is (null (branch-info-function-set rpb-info)))
+    (is (= 4
+           (evaluate-adf-program
+            new-program
+            :environment '((:data . (1 2 3)) (:d0 . 4)))))))

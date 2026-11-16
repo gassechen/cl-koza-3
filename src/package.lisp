@@ -130,15 +130,24 @@
    #:*argument-creation-fraction*
    #:*branch-deletion-fraction*
    #:*argument-deletion-fraction*
+   #:*adi-creation-fraction*
+   #:*adi-deletion-fraction*
+   #:*adi-creation-iteration-source*
+   #:*adi-creation-iteration-variable*
+   #:*adi-creation-iteration-index-variable*
+   #:*adi-creation-iteration-item-type*
    #:branch-duplication
    #:argument-duplication
    #:branch-creation
    #:argument-creation
    #:branch-deletion
    #:argument-deletion
+   #:adi-creation
+   #:adi-deletion
    #:crossover-with-point-typing
    #:valid-crossover-fragment-p
-   #:run-architecture-altering-system))
+   #:run-architecture-altering-system
+   #:run-adi-architecture-altering-system))
 
 (defpackage #:cl-koza-3
   (:use #:cl
@@ -231,12 +240,21 @@
    #:*argument-creation-fraction*
    #:*branch-deletion-fraction*
    #:*argument-deletion-fraction*
+   #:*adi-creation-fraction*
+   #:*adi-deletion-fraction*
+   #:*adi-creation-iteration-source*
+   #:*adi-creation-iteration-variable*
+   #:*adi-creation-iteration-index-variable*
+   #:*adi-creation-iteration-item-type*
    #:branch-duplication
    #:argument-duplication
    #:branch-creation
    #:argument-creation
    #:branch-deletion
    #:argument-deletion
+   #:adi-creation
+   #:adi-deletion
    #:crossover-with-point-typing
    #:valid-crossover-fragment-p
-   #:run-architecture-altering-system))
+   #:run-architecture-altering-system
+   #:run-adi-architecture-altering-system))

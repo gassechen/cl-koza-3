@@ -299,8 +299,10 @@ binding is absent, the call falls back to the dynamic variable
 iteration binds the current element and its zero-based index. The ADI
 returns the final state.
 
-ADI support is a fixed core: the six architecture-altering operations are
-not yet ADI-aware.
+ADI branches are fixed: `run-adi-system` creates them, and the six
+architecture-altering operations preserve them while updating ADI calls and
+metadata as ADFs are added or removed. The operations do not create or delete
+ADI branches themselves.
 
 `run-genetic-programming-system` is the compatibility wrapper for the
 legacy two-ADF contract. Its `problem-function` returns ten values:
@@ -659,7 +661,7 @@ The test suite uses FiveAM and is registered as `cl-koza-3/tests`:
 At the time of writing the suite reports:
 
 ```text
-Pass: 3297 (99%)
+Pass: 3340 (99%)
 Skip: 2 ( 0%)
 Fail: 0 ( 0%)
 ```
@@ -691,6 +693,8 @@ The two skipped tests document known issues:
 - **Phase 7 (done):** fixed ADI core with external iteration sequences,
   state formals, iteration element/index bindings, `run-adi-system`, the
   `adi-sequence-sum` example, and ADI branch generation/evaluation tests.
+- **Phase 8 (done):** architecture-altering operations that preserve ADIs,
+  update ADI calls, and remap ADI/ADF metadata when ADF branches change.
 
 ### Project layout
 

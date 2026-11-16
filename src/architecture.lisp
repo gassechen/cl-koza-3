@@ -290,22 +290,43 @@
   (make-adf-program :adfs adfs :adis adis :rpb rpb :branch-info infos))
 
 (defun insert-adf-info (infos info)
-  (let ((rpb-index (1- (length infos))))
+  (let ((adf-info-count
+          (count-if (lambda (branch-info)
+                      (eq (branch-info-kind branch-info) :adf))
+                    infos)))
     (concatenate 'vector
-                 (subseq infos 0 rpb-index)
+                 (subseq infos 0 adf-info-count)
                  (vector info)
-                 (subseq infos rpb-index))))
+                 (subseq infos adf-info-count))))
 
 (defun normalize-branch-index (program branch)
   (let ((index (branch-index branch)))
     (cond ((eq index :rpb)
-           (adf-program-branch-count program))
+           (adf-program-work-branch-count program))
+          ((consp index)
+           (let ((adi-index (cdr index)))
+             (unless (< adi-index (adf-program-adi-count program))
+               (error "PROGRAM has no branch named ~S." branch))
+             (+ (adf-program-branch-count program) adi-index)))
           ((and (integerp index)
                 (<= 0 index)
                 (< index (adf-program-branch-count program)))
            index)
           (t
            (error "PROGRAM has no branch named ~S." branch)))))
+
+(defun set-branch-body-at (program index new-body)
+  (let ((adf-count (adf-program-branch-count program))
+        (work-count (adf-program-work-branch-count program)))
+    (cond ((< index adf-count)
+           (setf (adf-program-adf program index) new-body))
+          ((< index work-count)
+           (setf (adf-program-adi program (- index adf-count)) new-body))
+          ((= index work-count)
+           (setf (adf-program-rpb program) new-body))
+          (t
+           (error "PROGRAM has no branch at index ~D." index))))
+  program)
 
 (defun operation-adf-branch-index (program branch)
   (cond ((null branch)
@@ -642,18 +663,26 @@
                         (aref new-adfs index) source-index new-index)))
       (setf (aref new-adfs source-index)
             (copy-tree (aref new-adfs source-index)))
-      (let ((new-rpb
-              (duplicate-adf-calls-in-tree
-               (copy-tree (adf-program-rpb program))
-               source-index
-               new-index)))
+      (let* ((new-adis
+               (map 'vector #'copy-tree
+                    (adf-program-adis program)))
+             (new-rpb
+               (duplicate-adf-calls-in-tree
+                (copy-tree (adf-program-rpb program))
+                source-index
+                new-index)))
+        (loop for index below (length new-adis)
+              do (setf (aref new-adis index)
+                       (duplicate-adf-calls-in-tree
+                        (aref new-adis index) source-index new-index)))
         (make-operation-program
          (concatenate 'vector
                       new-adfs
                       (vector (copy-tree
                                (adf-program-adf program source-index))))
          new-rpb
-         (insert-adf-info new-infos new-info))))))
+         (insert-adf-info new-infos new-info)
+         new-adis)))))
 
 (defun update-adf-arity-in-infos (infos index new-arity)
   (loop for info across infos
@@ -693,6 +722,8 @@
       (let* ((new-infos (copy-branch-infos program))
              (new-adfs (map 'vector #'copy-tree
                             (adf-program-adfs program)))
+             (new-adis (map 'vector #'copy-tree
+                            (adf-program-adis program)))
              (new-rpb (copy-tree (adf-program-rpb program))))
         (update-adf-arity-in-infos new-infos source-index new-arity)
         (setf (aref new-infos source-index) new-info)
@@ -704,10 +735,15 @@
               do (setf (aref new-adfs index)
                        (duplicate-call-argument-in-tree
                         (aref new-adfs index) source-index argument-index)))
+        (loop for index below (length new-adis)
+              do (setf (aref new-adis index)
+                       (duplicate-call-argument-in-tree
+                        (aref new-adis index)
+                        source-index argument-index)))
         (setf new-rpb
               (duplicate-call-argument-in-tree
                new-rpb source-index argument-index))
-        (make-operation-program new-adfs new-rpb new-infos)))))
+        (make-operation-program new-adfs new-rpb new-infos new-adis)))))
 
 (defun designate-p ()
   (< (random-floating-point-number 1.0)
@@ -848,14 +884,22 @@
             (add-allowed-index new-source-info new-index))
           (let ((new-adfs (map 'vector #'copy-tree
                                (adf-program-adfs program)))
+                (new-adis (map 'vector #'copy-tree
+                               (adf-program-adis program)))
                 (new-rpb (copy-tree (adf-program-rpb program))))
-            (if (= source-index adf-count)
-                (setf new-rpb (first wrapper))
-                (setf (aref new-adfs source-index) (first wrapper)))
+            (cond ((= source-index
+                      (adf-program-work-branch-count program))
+                   (setf new-rpb (first wrapper)))
+                  ((< source-index adf-count)
+                   (setf (aref new-adfs source-index) (first wrapper)))
+                  (t
+                   (setf (aref new-adis (- source-index adf-count))
+                         (first wrapper))))
             (make-operation-program
              (concatenate 'vector new-adfs (vector new-body))
              new-rpb
-             (insert-adf-info new-infos new-info))))))))
+             (insert-adf-info new-infos new-info)
+             new-adis)))))))
 
 (defun set-point (body point new-value)
   (let ((wrapper (list (copy-tree body))))
@@ -921,6 +965,8 @@
       (let* ((new-infos (copy-branch-infos program))
              (new-adfs (map 'vector #'copy-tree
                             (adf-program-adfs program)))
+             (new-adis (map 'vector #'copy-tree
+                            (adf-program-adis program)))
              (new-rpb (copy-tree (adf-program-rpb program))))
         (update-adf-arity-in-infos new-infos source-index new-arity)
         (setf (aref new-infos source-index) new-info)
@@ -948,8 +994,11 @@
             (loop for index below (length new-adfs)
                   do (setf (aref new-adfs index)
                            (append-argument (aref new-adfs index))))
+            (loop for index below (length new-adis)
+                  do (setf (aref new-adis index)
+                           (append-argument (aref new-adis index))))
             (setf new-rpb (append-argument new-rpb))))
-        (make-operation-program new-adfs new-rpb new-infos)))))
+        (make-operation-program new-adfs new-rpb new-infos new-adis)))))
 
 (defun adjust-adf-symbol-for-deletion (symbol deleted-index)
   (let ((index (adf-symbol-index symbol)))
@@ -1059,20 +1108,22 @@
            (or (operation-adf-branch-index program branch)
                (return-from branch-deletion nil)))
          (adf-count (adf-program-branch-count program))
+         (adi-count (adf-program-adi-count program))
          (infos (adf-program-branch-info program))
          (new-infos (remove-adf-info infos deleted-index))
          (generation-program
            (make-operation-program
             (make-array (1- adf-count) :initial-element nil)
             nil
-            new-infos)))
-    (loop for old-index below adf-count
+            new-infos
+            (make-array adi-count :initial-element nil))))
+    (loop for old-index below (+ adf-count adi-count)
           unless (= old-index deleted-index)
             do (let ((new-index (if (< old-index deleted-index)
                                     old-index
                                     (1- old-index))))
                  (when (and (tree-contains-adf-call-p
-                             (adf-program-adf program old-index)
+                             (branch-body-at program old-index)
                              deleted-index)
                             (not (can-generate-subtree-p
                                   (aref new-infos new-index)
@@ -1084,7 +1135,8 @@
                      (aref new-infos (1- (length new-infos)))
                      generation-program)))
       (return-from branch-deletion nil))
-    (let ((new-adfs nil))
+    (let ((new-adfs nil)
+          (new-adis (make-array adi-count)))
       (loop for old-index below adf-count
             unless (= old-index deleted-index)
               do (let ((new-index (if (< old-index deleted-index)
@@ -1099,6 +1151,17 @@
                              (branch-info-result-type new-info)
                              generation-program)
                             new-adfs))))
+      (loop for adi-index below adi-count
+            for new-info = (aref new-infos
+                                  (+ (1- adf-count) adi-index))
+            do (setf (aref new-adis adi-index)
+                     (delete-adf-calls-in-tree
+                      (adf-program-adi program adi-index)
+                      deleted-index
+                      new-info
+                      program
+                      (branch-info-result-type new-info)
+                      generation-program)))
       (let* ((rpb-info (aref new-infos (1- (length new-infos))))
              (new-rpb
                (delete-adf-calls-in-tree
@@ -1110,7 +1173,8 @@
                 generation-program)))
         (make-operation-program (coerce (nreverse new-adfs) 'vector)
                                 new-rpb
-                                new-infos)))))
+                                new-infos
+                                new-adis)))))
 
 (defun build-formal-renamings (old-formals deleted-index new-formals)
   (loop for old-formal in old-formals
@@ -1211,9 +1275,13 @@
                   (make-array (adf-program-branch-count program)
                               :initial-element nil)
                   nil
-                  new-infos))
+                  new-infos
+                  (make-array (adf-program-adi-count program)
+                              :initial-element nil)))
                (new-adfs (map 'vector #'copy-tree
                               (adf-program-adfs program)))
+               (new-adis (map 'vector #'copy-tree
+                              (adf-program-adis program)))
                (new-rpb (copy-tree (adf-program-rpb program))))
           (update-adf-arity-in-infos new-infos source-index new-arity)
           (setf (aref new-infos source-index) new-info)
@@ -1238,10 +1306,17 @@
                           (aref new-adfs index)
                           source-index
                           argument-index)))
+          (loop for index below (length new-adis)
+                do (setf (aref new-adis index)
+                         (remove-call-argument-in-tree
+                          (aref new-adis index)
+                          source-index
+                          argument-index)))
           (setf new-rpb
                 (remove-call-argument-in-tree
                  new-rpb source-index argument-index))
-          (make-operation-program new-adfs new-rpb new-infos))))))
+          (make-operation-program
+           new-adfs new-rpb new-infos new-adis))))))
 
 (defun adf-call-allowed-p (info index)
   (let ((allowed (branch-info-allowed-branch-indices info)))
@@ -1277,9 +1352,7 @@
   (let ((branch-index (car point))
         (pointer (cdr point)))
     (if (eq pointer :root)
-        (if (= branch-index (adf-program-branch-count program))
-            (setf (adf-program-rpb program) fragment)
-            (setf (adf-program-adf program branch-index) fragment))
+        (set-branch-body-at program branch-index fragment)
         (setf (first pointer) fragment)))
   program)
 
@@ -1310,7 +1383,8 @@
            (make-operation-program
             (map 'vector #'copy-tree (adf-program-adfs receiving))
             (copy-tree (adf-program-rpb receiving))
-            (copy-branch-infos receiving)))
+            (copy-branch-infos receiving)
+            (map 'vector #'copy-tree (adf-program-adis receiving))))
          (candidate-points nil))
     (labels ((collect-branch-pointers (branch-index)
                (let* ((body (branch-body-at new-program branch-index))
@@ -1349,7 +1423,7 @@
           (collect-branch-pointers
            (normalize-branch-index receiving receiving-branch))
           (loop for branch-index
-                  below (1+ (adf-program-branch-count new-program))
+                  below (1+ (adf-program-work-branch-count new-program))
                 do (collect-branch-pointers branch-index)))
       (when (null candidate-points)
         (return-from crossover-with-point-typing nil))
@@ -1359,7 +1433,7 @@
         (apply-crossover-point new-program point (copy-tree fragment)))
       (when (and max-depth
                  (loop for branch-index
-                         below (1+ (adf-program-branch-count new-program))
+                         below (1+ (adf-program-work-branch-count new-program))
                        thereis (> (max-depth-of-tree
                                    (branch-body-at new-program branch-index))
                                   max-depth)))

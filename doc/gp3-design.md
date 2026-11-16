@@ -25,8 +25,9 @@ Koza's Boolean even-5-parity run.
 
 The ADI core iterates each ADI over an external sequence and exposes the
 current element and zero-based index. The architecture-altering operations
-are not yet ADI-aware. The implementation does not include loops,
-recursion, or storage (ADL, ADR, ADS), nor the GPPS, analog circuit,
+preserve ADIs and update ADI calls and metadata when ADF branches change, but
+they do not create or remove ADI branches. The implementation does not include
+loops, recursion, or storage (ADL, ADR, ADS), nor the GPPS, analog circuit,
 evolvable-hardware, or biology material from the books.
 
 ## Program representation
@@ -296,9 +297,9 @@ single-run illustration, not an estimate of success probability.
 
 - The implemented point types are `:boolean` and `:number`; this is not the
   full Koza type hierarchy.
-- ADI support is a fixed core. The six architecture-altering operations do
-  not yet preserve or manipulate ADIs, so they should not be used on
-  programs that contain them.
+- ADI branches are fixed. The six architecture-altering operations preserve
+  ADIs and update their calls and metadata when ADF branches change, but the
+  operations do not create or delete ADI branches.
 - ADI iteration sequences are supplied externally; the kernel does not
   evolve sequence constructors, loop bounds, or storage. ADL, ADR, ADS, and
   recursion are not implemented.

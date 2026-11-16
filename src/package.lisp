@@ -23,9 +23,14 @@
    #:branch-info-formals
    #:branch-info-function-set
    #:branch-info-function-argument-map
+   #:branch-info-function-types
    #:branch-info-terminal-set
+   #:branch-info-terminal-types
    #:branch-info-result-type
    #:branch-info-allowed-branch-indices
+   #:branch-info-iteration-source
+   #:branch-info-iteration-variable
+   #:branch-info-iteration-index-variable
    #:adf-program
    #:make-adf-program
    #:copy-adf-program
@@ -34,7 +39,11 @@
    #:adf-program-adf1
    #:adf-program-adfs
    #:adf-program-adf
+   #:adf-program-adis
+   #:adf-program-adi
    #:adf-program-branch-count
+   #:adf-program-adi-count
+   #:adf-program-work-branch-count
    #:adf-program-rpb
    #:adf-program-branch-info
    #:branch-index
@@ -57,6 +66,7 @@
   (:use #:cl
         #:cl-koza-3.program)
   (:export
+   #:*iteration-sequence*
    #:evaluate-adf-tree
    #:evaluate-adf-branch
    #:evaluate-adf-program))
@@ -86,11 +96,13 @@
    #:*generation-of-best-of-run-individual*
    #:run-genetic-programming-system
    #:run-adf-system
+   #:run-adi-system
    #:branch-spec
    #:make-branch-spec
    #:branch-spec-function-set-creator
    #:branch-spec-terminal-set-creator
    #:branch-spec-arity
+   #:branch-spec-result-type
    #:individual
    #:make-individual
    #:copy-individual
@@ -155,11 +167,13 @@
    #:*generation-of-best-of-run-individual*
    #:run-genetic-programming-system
    #:run-adf-system
+   #:run-adi-system
    #:branch-spec
    #:make-branch-spec
    #:branch-spec-function-set-creator
    #:branch-spec-terminal-set-creator
    #:branch-spec-arity
+   #:branch-spec-result-type
    #:individual
    #:make-individual
    #:individual-program
@@ -176,22 +190,32 @@
    #:branch-info-formals
    #:branch-info-function-set
    #:branch-info-function-argument-map
+   #:branch-info-function-types
    #:branch-info-terminal-set
+   #:branch-info-terminal-types
    #:branch-info-result-type
    #:branch-info-allowed-branch-indices
+   #:branch-info-iteration-source
+   #:branch-info-iteration-variable
+   #:branch-info-iteration-index-variable
    #:adf-program
    #:make-adf-program
    #:adf-program-adf0
    #:adf-program-adf1
    #:adf-program-adfs
    #:adf-program-adf
+   #:adf-program-adis
+   #:adf-program-adi
    #:adf-program-branch-count
+   #:adf-program-adi-count
+   #:adf-program-work-branch-count
    #:adf-program-rpb
    #:adf-program-branch-info
    #:branch-info-index
    #:branch-formals
    #:program-branch-info
    #:valid-branch-info-p
+   #:*iteration-sequence*
    #:evaluate-adf-tree
    #:evaluate-adf-branch
    #:evaluate-adf-program

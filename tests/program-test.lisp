@@ -161,7 +161,10 @@
                               &key
                                 (function-set '(and or))
                                 (function-argument-map '(2 2))
+                                (function-types nil)
                                 (terminal-set '(:arg0 :arg1))
+                                (terminal-types nil)
+                                (result-type :boolean)
                                 (allowed-branch-indices nil))
   (make-branch-info
    :name name
@@ -170,8 +173,10 @@
    :formals formals
    :function-set function-set
    :function-argument-map function-argument-map
+   :function-types function-types
    :terminal-set terminal-set
-   :result-type :boolean
+   :terminal-types terminal-types
+   :result-type result-type
    :allowed-branch-indices allowed-branch-indices))
 
 (test adf-program-branch-info-access

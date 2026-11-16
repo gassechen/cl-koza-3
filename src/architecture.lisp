@@ -46,6 +46,20 @@
 (defun adf-symbol (index &optional (package :keyword))
   (intern (format nil "ADF~D" index) (or package :keyword)))
 
+(defun adi-symbol-p (symbol)
+  (and (symbolp symbol)
+       (let ((name (symbol-name symbol)))
+         (and (> (length name) 3)
+              (string= name "ADI" :end1 3)
+              (every #'digit-char-p (subseq name 3))))))
+
+(defun adi-symbol-index (symbol)
+  (when (adi-symbol-p symbol)
+    (parse-integer (symbol-name symbol) :start 3)))
+
+(defun adi-symbol (index &optional (package :keyword))
+  (intern (format nil "ADI~D" index) (or package :keyword)))
+
 (defun argument-symbol (index &optional (package :keyword))
   (intern (format nil "ARG~D" index) (or package :keyword)))
 
@@ -61,6 +75,148 @@
     (when (and index
                (< index (length (branch-info-function-argument-map info))))
       (nth index (branch-info-function-argument-map info)))))
+
+(defun function-type-entry (info function)
+  (when (symbolp function)
+    (find function
+          (branch-info-function-types info)
+          :key #'first
+          :test #'same-symbol-name-p)))
+
+(defun terminal-type-entry (info terminal)
+  (when (symbolp terminal)
+    (find terminal
+          (branch-info-terminal-types info)
+          :key #'first
+          :test #'same-symbol-name-p)))
+
+(defun terminal-type (info terminal)
+  (cond
+    ((or (eq terminal :integer-random-constant)
+         (eq terminal :floating-point-random-constant))
+     :number)
+    ((numberp terminal) :number)
+    ((symbolp terminal)
+     (or (let ((entry (terminal-type-entry info terminal)))
+           (and entry (cdr entry)))
+         :boolean))
+    (t :boolean)))
+
+(defun branch-call-index (function)
+  (or (adf-symbol-index function)
+      (adi-symbol-index function)))
+
+(defun branch-call-target-info (function program)
+  (let ((adf-index (adf-symbol-index function)))
+    (cond
+      (adf-index
+       (and program
+            (< adf-index (adf-program-branch-count program))
+            (program-branch-info program adf-index)))
+      ((adi-symbol-index function)
+       (and program
+            (program-branch-info
+             program
+             (adi-symbol (adi-symbol-index function)))))
+      (t nil))))
+
+(defun branch-call-allowed-p (info function program)
+  (let ((target-info (branch-call-target-info function program))
+        (adf-index (adf-symbol-index function)))
+    (and target-info
+         (function-arity info function)
+         (if adf-index
+             (or (null (branch-info-allowed-branch-indices info))
+                 (member adf-index
+                         (branch-info-allowed-branch-indices info)))
+             t))))
+
+(defun function-result-type-in-info (info function program)
+  (let ((target-info (branch-call-target-info function program)))
+    (if target-info
+        (branch-info-result-type target-info)
+        (let ((entry (function-type-entry info function)))
+          (if entry
+              (second entry)
+              :boolean)))))
+
+(defun function-argument-types-in-info (info function program)
+  (let ((target-info (branch-call-target-info function program)))
+    (if target-info
+        (loop for formal in (branch-info-formals target-info)
+              collect (terminal-type target-info formal))
+        (let* ((arity (function-arity info function))
+               (entry (function-type-entry info function))
+               (declared (and entry (cddr entry))))
+          (loop for index below (or arity 0)
+                collect (or (nth index declared) :boolean))))))
+
+(defun set-terminal-type (info terminal type)
+  (when (or (branch-info-terminal-types info)
+            (not (eq type :boolean)))
+    (setf (branch-info-terminal-types info)
+          (acons terminal type
+                 (remove-if
+                  (lambda (entry)
+                    (same-symbol-name-p terminal (car entry)))
+                  (branch-info-terminal-types info)))))
+  info)
+
+(defun valid-constant-p (constant terminal-set)
+  (or (member constant terminal-set :test #'equal)
+      (and (integerp constant)
+           (name-member-p :integer-random-constant terminal-set))
+      (and (floatp constant)
+           (name-member-p :floating-point-random-constant terminal-set))))
+
+(defun typed-tree-type (tree info &optional program)
+  "Returns the type of TREE under INFO, or NIL when TREE is invalid."
+  (cond
+    ((consp tree)
+     (let* ((operator (first tree))
+            (arguments (rest tree))
+            (call-p (branch-call-index operator))
+            (target-info (branch-call-target-info operator program)))
+       (if call-p
+           (when (and target-info
+                      (branch-call-allowed-p info operator program)
+                      (= (length arguments)
+                         (branch-info-arity target-info)))
+             (let ((argument-types
+                     (function-argument-types-in-info
+                      info operator program)))
+               (when (loop for argument in arguments
+                           for type in argument-types
+                           always (and type
+                                       (eq (typed-tree-type
+                                            argument info program)
+                                           type)))
+                 (branch-info-result-type target-info))))
+           (let ((arity (function-arity info operator)))
+             (when (and arity (= (length arguments) arity))
+               (let ((argument-types
+                       (function-argument-types-in-info
+                        info operator program)))
+                 (when (loop for argument in arguments
+                             for type in argument-types
+                             always (and type
+                                         (eq (typed-tree-type
+                                              argument info program)
+                                             type)))
+                   (function-result-type-in-info
+                    info operator program))))))))
+    ((symbolp tree)
+     (when (name-member-p tree (branch-info-terminal-set info))
+       (terminal-type info tree)))
+    ((numberp tree)
+     (when (valid-constant-p tree (branch-info-terminal-set info))
+       :number))
+    (t nil)))
+
+(defun typed-branch-info-p (info)
+  (or (branch-info-function-types info)
+      (branch-info-terminal-types info)
+      (not (eq (branch-info-result-type info) :boolean))))
 
 (defun add-function-entry (info function arity)
   (unless (function-set-index info function)
@@ -92,8 +248,12 @@
             (copy-list (branch-info-function-set copy)))
       (setf (branch-info-function-argument-map copy)
             (copy-list (branch-info-function-argument-map copy)))
+      (setf (branch-info-function-types copy)
+            (copy-tree (branch-info-function-types copy)))
       (setf (branch-info-terminal-set copy)
             (copy-list (branch-info-terminal-set copy)))
+      (setf (branch-info-terminal-types copy)
+            (copy-tree (branch-info-terminal-types copy)))
       (setf (branch-info-allowed-branch-indices copy)
             (copy-list (branch-info-allowed-branch-indices copy)))
       copy)))
@@ -104,7 +264,7 @@
 (defun ensure-branch-metadata (program)
   (let ((infos (adf-program-branch-info program)))
     (unless (= (length infos)
-               (1+ (adf-program-branch-count program)))
+               (1+ (adf-program-work-branch-count program)))
       (error "PROGRAM does not have branch metadata for every branch."))
     infos))
 
@@ -115,12 +275,19 @@
     (aref infos index)))
 
 (defun branch-body-at (program index)
-  (if (= index (adf-program-branch-count program))
-      (adf-program-rpb program)
-      (adf-program-adf program index)))
+  (let ((adf-count (adf-program-branch-count program))
+        (adi-count (adf-program-adi-count program)))
+    (cond ((< index adf-count)
+           (adf-program-adf program index))
+          ((< index (+ adf-count adi-count))
+           (adf-program-adi program (- index adf-count)))
+          ((= index (+ adf-count adi-count))
+           (adf-program-rpb program))
+          (t
+           (error "PROGRAM has no branch at index ~D." index)))))
 
-(defun make-operation-program (adfs rpb infos)
-  (make-adf-program :adfs adfs :rpb rpb :branch-info infos))
+(defun make-operation-program (adfs rpb infos &optional adis)
+  (make-adf-program :adfs adfs :adis adis :rpb rpb :branch-info infos))
 
 (defun insert-adf-info (infos info)
   (let ((rpb-index (1- (length infos))))
@@ -200,9 +367,117 @@
                    (cdr tree))))
         (t nil)))
 
-(defun can-generate-subtree-p (info)
-  (or (branch-info-terminal-set info)
-      (some #'zerop (branch-info-function-argument-map info))))
+(defun terminals-of-type (info type)
+  (remove-if-not (lambda (terminal)
+                   (eq (terminal-type info terminal) type))
+                 (branch-info-terminal-set info)))
+
+(defun typed-type-generatable-p (info type remaining program)
+  (when (>= remaining 0)
+    (or (terminals-of-type info type)
+        (loop for function in (branch-info-function-set info)
+              for arity in (branch-info-function-argument-map info)
+              for call-p = (branch-call-index function)
+              thereis
+              (and (or (null call-p) program)
+                   (or (null call-p)
+                       (branch-call-allowed-p info function program))
+                   (eq (function-result-type-in-info
+                        info function program)
+                       type)
+                   (if (zerop arity)
+                       t
+                       (and (plusp remaining)
+                            (let ((argument-types
+                                    (function-argument-types-in-info
+                                     info function program)))
+                              (and (= (length argument-types) arity)
+                                   (loop for argument-type in argument-types
+                                         always
+                                         (and argument-type
+                                              (typed-type-generatable-p
+                                               info argument-type
+                                               (1- remaining)
+                                               program))))))))))))
+
+(defun subtree-generation-depth ()
+  (if (integerp *max-depth-for-new-subtrees-in-mutants*)
+      *max-depth-for-new-subtrees-in-mutants*
+      4))
+
+(defun can-generate-subtree-p (info &optional program)
+  (if (typed-branch-info-p info)
+      (typed-type-generatable-p
+       info (branch-info-result-type info)
+       (subtree-generation-depth) program)
+      (or (branch-info-terminal-set info)
+          (some #'zerop (branch-info-function-argument-map info)))))
+
+(defun typed-function-indices (info type remaining program)
+  (loop for function in (branch-info-function-set info)
+        for arity in (branch-info-function-argument-map info)
+        for index from 0
+        for call-p = (branch-call-index function)
+        when (and (or (null call-p) program)
+                  (or (null call-p)
+                      (branch-call-allowed-p info function program))
+                  (eq (function-result-type-in-info
+                       info function program)
+                      type)
+                  (if (zerop arity)
+                      t
+                      (and (plusp remaining)
+                           (let ((argument-types
+                                   (function-argument-types-in-info
+                                    info function program)))
+                             (and (= (length argument-types) arity)
+                                  (loop for argument-type in argument-types
+                                        always
+                                        (and argument-type
+                                             (typed-type-generatable-p
+                                              info argument-type
+                                              (1- remaining)
+                                              program))))))))
+          collect index))
+
+(defun generate-random-typed-subtree
+    (info type depth &optional program full-p)
+  (labels ((build-function (index remaining)
+             (let* ((function
+                      (nth index (branch-info-function-set info)))
+                    (argument-types
+                      (function-argument-types-in-info
+                       info function program)))
+               (cons function
+                     (loop for argument-type in argument-types
+                           collect (node argument-type
+                                         (1- remaining) nil)))))
+           (node (type remaining top-node-p)
+             (let ((function-indices
+                     (typed-function-indices info type remaining program))
+                   (terminals (terminals-of-type info type)))
+               (cond
+                 ((and function-indices
+                       (or top-node-p
+                           full-p
+                           (null terminals)
+                           (and (plusp remaining)
+                                (zerop (random-integer 2)))))
+                  (build-function
+                   (nth (random-integer (length function-indices))
+                        function-indices)
+                   remaining))
+                 (terminals
+                  (cl-koza-3.kernel::choose-from-terminal-set terminals))
+                 (function-indices
+                  (build-function
+                   (nth (random-integer (length function-indices))
+                        function-indices)
+                   remaining))
+                 (t
+                  (error "Cannot generate a ~S subtree for branch ~S."
+                         type (branch-info-name info)))))))
+    (node type (max 1 depth) t)))
 
 (defun generate-random-subtree (info
                                 &optional
@@ -210,53 +485,66 @@
                                     (if (integerp
                                          *max-depth-for-new-subtrees-in-mutants*)
                                         *max-depth-for-new-subtrees-in-mutants*
-                                        4)))
+                                        4))
+                                  program)
   "Generates a random subtree from the function and terminal metadata in
-   INFO."
-  (unless (can-generate-subtree-p info)
-    (error "Branch ~S has no terminal or zero-argument function."
-           (branch-info-name info)))
-  (let ((functions (branch-info-function-set info))
-        (argument-map (branch-info-function-argument-map info))
-        (terminals (branch-info-terminal-set info)))
-    (labels ((choose-terminal ()
-               (cl-koza-3.kernel::choose-from-terminal-set terminals))
-             (usable-function-indices (remaining)
-               (if (plusp remaining)
-                   (loop for arity in argument-map
-                         for index from 0
-                         when (or (plusp arity) (zerop arity))
-                           collect index)
-                   (loop for arity in argument-map
-                         for index from 0
-                         when (zerop arity)
-                           collect index)))
-             (build-function (index remaining)
-               (cons (nth index functions)
-                     (loop repeat (nth index argument-map)
-                           collect (node (1- remaining) nil))))
-             (node (remaining top-node-p)
-               (let ((usable (usable-function-indices remaining)))
-                 (cond
-                   ((and functions
-                         (or top-node-p
-                             (null terminals)
-                             (and (plusp remaining)
-                                  terminals
-                                  (zerop (random-integer 2)))))
-                    (build-function
-                     (nth (random-integer (length usable)) usable)
-                     remaining))
-                   (terminals
-                    (choose-terminal))
-                   (usable
-                    (build-function
-                     (nth (random-integer (length usable)) usable)
-                     remaining))
-                   (t
-                    (error "Cannot generate a subtree for branch ~S."
-                           (branch-info-name info)))))))
-      (node (max 1 depth) t))))
+   INFO.  Typed branches generate subtrees of the branch result type."
+  (unless (can-generate-subtree-p info program)
+    (error "Branch ~S cannot generate a ~S subtree."
+           (branch-info-name info)
+           (if (typed-branch-info-p info)
+               (branch-info-result-type info)
+               :untyped)))
+  (if (typed-branch-info-p info)
+      (generate-random-typed-subtree
+       info (branch-info-result-type info) depth program)
+      (let ((functions (branch-info-function-set info))
+            (argument-map (branch-info-function-argument-map info))
+            (terminals (branch-info-terminal-set info)))
+        (labels ((choose-terminal ()
+                   (cl-koza-3.kernel::choose-from-terminal-set terminals))
+                 (usable-function-indices (remaining)
+                   (if (plusp remaining)
+                       (loop for arity in argument-map
+                             for index from 0
+                             when (or (plusp arity) (zerop arity))
+                               collect index)
+                       (loop for arity in argument-map
+                             for index from 0
+                             when (zerop arity)
+                               collect index)))
+                 (build-function (index remaining)
+                   (cons (nth index functions)
+                         (loop repeat (nth index argument-map)
+                               collect (node (1- remaining) nil))))
+                 (node (remaining top-node-p)
+                   (let ((usable (usable-function-indices remaining)))
+                     (cond
+                       ((and functions
+                             (or top-node-p
+                                 (null terminals)
+                                 (and (plusp remaining)
+                                      terminals
+                                      (zerop (random-integer 2)))))
+                        (build-function
+                         (nth (random-integer (length usable)) usable)
+                         remaining))
+                       (terminals
+                        (choose-terminal))
+                       (usable
+                        (build-function
+                         (nth (random-integer (length usable)) usable)
+                         remaining))
+                       (t
+                        (error "Cannot generate a subtree for branch ~S."
+                               (branch-info-name info)))))))
+          (node (max 1 depth) t)))))
+
+(defun generate-random-subtree-of-type (info type &optional program)
+  (if (typed-branch-info-p info)
+      (generate-random-typed-subtree
+       info type (subtree-generation-depth) program)
+      (generate-random-subtree info)))
 
 (defun duplicate-formal-references (tree old-formal new-formal)
   (cond ((consp tree)
@@ -400,6 +688,8 @@
                              new-formal
                              (branch-info-terminal-set info))
                       (list new-formal))))
+      (set-terminal-type new-info new-formal
+                         (terminal-type info old-formal))
       (let* ((new-infos (copy-branch-infos program))
              (new-adfs (map 'vector #'copy-tree
                             (adf-program-adfs program)))
@@ -503,9 +793,28 @@
                (new-formals
                  (loop for index below (length new-arguments)
                        collect (argument-symbol index :keyword)))
+               (new-argument-types
+                 (loop for argument in new-arguments
+                       collect (or (typed-tree-type
+                                    argument source-info program)
+                                   :boolean)))
                (new-terminal-set
                  (constant-terminal-set
                   (branch-info-terminal-set source-info)))
+               (new-terminal-types
+                 (append
+                  (loop for entry in
+                          (branch-info-terminal-types source-info)
+                        when (and (name-member-p (car entry)
+                                                  new-terminal-set)
+                                  (not (name-member-p
+                                        (car entry) new-formals)))
+                          collect (copy-tree entry))
+                  (loop for formal in new-formals
+                        for type in new-argument-types
+                        when (or (branch-info-terminal-types source-info)
+                                 (not (eq type :boolean)))
+                          collect (cons formal type))))
                (new-info
                  (make-branch-info
                   :name (adf-symbol new-index :keyword)
@@ -516,12 +825,15 @@
                   (copy-list (branch-info-function-set source-info))
                   :function-argument-map
                   (copy-list (branch-info-function-argument-map source-info))
+                  :function-types
+                  (copy-tree (branch-info-function-types source-info))
                   :terminal-set
                   (append new-terminal-set
                           (loop for formal in new-formals
                                 unless (name-member-p
                                         formal new-terminal-set)
                                   collect formal))
+                  :terminal-types new-terminal-types
                   :result-type (branch-info-result-type source-info)
                   :allowed-branch-indices
                   (copy-list
@@ -589,9 +901,12 @@
            (fragment
              (nth-value 1
                         (get-subtree source-body (list source-body) point-index)))
+           (fragment-type (typed-tree-type fragment info program))
            (new-formal (argument-symbol arity :keyword))
            (new-info (copy-branch-info info))
            (new-arity (1+ arity)))
+      (unless fragment-type
+        (return-from argument-creation nil))
       (setf (branch-info-arity new-info) new-arity)
       (setf (branch-info-formals new-info)
             (append (copy-list (branch-info-formals info))
@@ -602,6 +917,7 @@
                              new-formal
                              (branch-info-terminal-set info))
                       (list new-formal))))
+      (set-terminal-type new-info new-formal fragment-type)
       (let* ((new-infos (copy-branch-infos program))
              (new-adfs (map 'vector #'copy-tree
                             (adf-program-adfs program)))
@@ -655,6 +971,14 @@
                (push arity new-argument-map))
     (setf (branch-info-function-set info) (nreverse new-functions))
     (setf (branch-info-function-argument-map info) (nreverse new-argument-map))
+    (when (branch-info-function-types info)
+      (setf (branch-info-function-types info)
+            (loop for entry in (branch-info-function-types info)
+                  for function = (first entry)
+                  for adjusted = (adjust-adf-symbol-for-deletion
+                                  function deleted-index)
+                  when adjusted
+                    collect (cons adjusted (copy-list (rest entry))))))
     info))
 
 (defun adjust-allowed-indices-for-deletion (allowed deleted-index)
@@ -692,26 +1016,38 @@
                (incf new-index))
     new-infos))
 
-(defun delete-adf-calls-in-tree (tree deleted-index info)
-  (cond ((consp tree)
-         (let* ((operator (car tree))
-                (call-index (adf-symbol-index operator)))
-           (cond ((eql call-index deleted-index)
-                  (generate-random-subtree info))
-                 (t
-                  (let ((new-operator
-                          (if (and call-index
-                                   (> call-index deleted-index))
-                              (adf-symbol
-                               (1- call-index)
-                               (symbol-package operator))
-                              operator)))
-                    (cons new-operator
-                          (mapcar (lambda (argument)
-                                    (delete-adf-calls-in-tree
-                                     argument deleted-index info))
-                                  (cdr tree))))))))
-        (t tree)))
+(defun delete-adf-calls-in-tree
+    (tree deleted-index info program expected-type generation-program)
+  (cond
+    ((consp tree)
+     (let* ((operator (car tree))
+            (call-index (adf-symbol-index operator)))
+       (cond
+         ((eql call-index deleted-index)
+          (generate-random-subtree-of-type
+           info
+           (or expected-type
+               (branch-info-result-type info))
+           generation-program))
+         (t
+          (let* ((new-operator
+                   (if (and call-index
+                            (> call-index deleted-index))
+                       (adf-symbol
+                        (1- call-index)
+                        (symbol-package operator))
+                       operator))
+                 (argument-types
+                   (function-argument-types-in-info
+                    info operator program)))
+            (cons new-operator
+                  (loop for argument in (cdr tree)
+                        for type in argument-types
+                        collect (delete-adf-calls-in-tree
+                                 argument deleted-index info
+                                 program type
+                                 generation-program))))))))
+    (t tree)))
 
 (defun branch-deletion (program &key branch)
   "Performs Koza's branch deletion operation, regenerating calls to the
@@ -724,7 +1060,12 @@
                (return-from branch-deletion nil)))
          (adf-count (adf-program-branch-count program))
          (infos (adf-program-branch-info program))
-         (new-infos (remove-adf-info infos deleted-index)))
+         (new-infos (remove-adf-info infos deleted-index))
+         (generation-program
+           (make-operation-program
+            (make-array (1- adf-count) :initial-element nil)
+            nil
+            new-infos)))
     (loop for old-index below adf-count
           unless (= old-index deleted-index)
             do (let ((new-index (if (< old-index deleted-index)
@@ -734,12 +1075,14 @@
                              (adf-program-adf program old-index)
                              deleted-index)
                             (not (can-generate-subtree-p
-                                  (aref new-infos new-index))))
+                                  (aref new-infos new-index)
+                                  generation-program)))
                    (return-from branch-deletion nil))))
     (when (and (tree-contains-adf-call-p
                 (adf-program-rpb program) deleted-index)
                (not (can-generate-subtree-p
-                     (aref new-infos (1- (length new-infos))))))
+                     (aref new-infos (1- (length new-infos)))
+                     generation-program)))
       (return-from branch-deletion nil))
     (let ((new-adfs nil))
       (loop for old-index below adf-count
@@ -747,16 +1090,24 @@
               do (let ((new-index (if (< old-index deleted-index)
                                       old-index
                                       (1- old-index))))
-                   (push (delete-adf-calls-in-tree
-                          (adf-program-adf program old-index)
-                          deleted-index
-                          (aref new-infos new-index))
-                         new-adfs)))
-      (let ((new-rpb
-              (delete-adf-calls-in-tree
-               (adf-program-rpb program)
-               deleted-index
-               (aref new-infos (1- (length new-infos))))))
+                   (let ((new-info (aref new-infos new-index)))
+                      (push (delete-adf-calls-in-tree
+                             (adf-program-adf program old-index)
+                             deleted-index
+                             new-info
+                             program
+                             (branch-info-result-type new-info)
+                             generation-program)
+                            new-adfs))))
+      (let* ((rpb-info (aref new-infos (1- (length new-infos))))
+             (new-rpb
+               (delete-adf-calls-in-tree
+                (adf-program-rpb program)
+                deleted-index
+                rpb-info
+                program
+                (branch-info-result-type rpb-info)
+                generation-program)))
         (make-operation-program (coerce (nreverse new-adfs) 'vector)
                                 new-rpb
                                 new-infos)))))
@@ -782,15 +1133,19 @@
         (if entry (cdr entry) tree))
       tree))
 
-(defun regenerate-and-rename-formals (tree deleted-formal renamings info)
+(defun regenerate-and-rename-formals
+    (tree deleted-formal deleted-type renamings info
+     &optional generation-program)
   (cond ((consp tree)
          (cons (car tree)
                (mapcar (lambda (argument)
                          (regenerate-and-rename-formals
-                          argument deleted-formal renamings info))
+                          argument deleted-formal deleted-type
+                          renamings info generation-program))
                        (cdr tree))))
         ((same-symbol-name-p tree deleted-formal)
-         (generate-random-subtree info))
+         (generate-random-subtree-of-type
+          info deleted-type generation-program))
         (t
          (rename-formal tree renamings))))
 
@@ -839,10 +1194,24 @@
                               (branch-info-terminal-set info)
                               old-formals))
                        collect formal)))
-        (when (and needs-regeneration
-                   (not (can-generate-subtree-p new-info)))
-          (return-from argument-deletion nil))
+        (setf (branch-info-terminal-types new-info)
+              (append
+               (remove-if
+                (lambda (entry)
+                  (name-member-p (car entry) old-formals))
+                (branch-info-terminal-types info))
+               (loop for pair in renamings
+                     for type = (terminal-type info (car pair))
+                     when (or (branch-info-terminal-types info)
+                              (not (eq type :boolean)))
+                       collect (cons (cdr pair) type))))
         (let* ((new-infos (copy-branch-infos program))
+               (generation-program
+                 (make-operation-program
+                  (make-array (adf-program-branch-count program)
+                              :initial-element nil)
+                  nil
+                  new-infos))
                (new-adfs (map 'vector #'copy-tree
                               (adf-program-adfs program)))
                (new-rpb (copy-tree (adf-program-rpb program))))
@@ -851,12 +1220,18 @@
           (set-function-arity new-info
                               (adf-symbol source-index :keyword)
                               new-arity)
+          (when (and needs-regeneration
+                     (not (can-generate-subtree-p
+                           new-info generation-program)))
+            (return-from argument-deletion nil))
           (setf (aref new-adfs source-index)
                 (regenerate-and-rename-formals
                  (aref new-adfs source-index)
                  deleted-formal
+                 (terminal-type info deleted-formal)
                  renamings
-                 new-info))
+                 new-info
+                 generation-program))
           (loop for index below (length new-adfs)
                 do (setf (aref new-adfs index)
                          (remove-call-argument-in-tree
@@ -868,13 +1243,6 @@
                  new-rpb source-index argument-index))
           (make-operation-program new-adfs new-rpb new-infos))))))
 
-(defun valid-constant-p (constant terminal-set)
-  (or (member constant terminal-set :test #'equal)
-      (and (integerp constant)
-           (name-member-p :integer-random-constant terminal-set))
-      (and (floatp constant)
-           (name-member-p :floating-point-random-constant terminal-set))))
-
 (defun adf-call-allowed-p (info index)
   (let ((allowed (branch-info-allowed-branch-indices info)))
     (and (function-arity info (adf-symbol index :keyword))
@@ -883,51 +1251,27 @@
 (defun valid-crossover-fragment-p (fragment source-info receiving-info program)
   "Returns true when FRAGMENT can be inserted into a RECEIVING-INFO
    branch of PROGRAM without violating point typing."
-  (labels ((valid-tree-p (tree)
-             (cond ((consp tree)
-                    (let* ((operator (car tree))
-                           (arguments (cdr tree))
-                           (adf-index (adf-symbol-index operator)))
-                      (if adf-index
-                          (let ((target-info
-                                  (and (< adf-index
-                                          (adf-program-branch-count program))
-                                       (program-branch-info
-                                        program adf-index))))
-                            (and target-info
-                                 (= (length arguments)
-                                    (branch-info-arity target-info))
-                                 (adf-call-allowed-p receiving-info adf-index)
-                                 (every #'valid-tree-p arguments)))
-                          (let ((arity (function-arity receiving-info operator)))
-                            (and arity
-                                 (= (length arguments) arity)
-                                 (every #'valid-tree-p arguments))))))
-                   ((symbolp tree)
-                    (name-member-p
-                     tree (branch-info-terminal-set receiving-info)))
-                   ((numberp tree)
-                    (valid-constant-p
-                     tree (branch-info-terminal-set receiving-info)))
-                   (t nil))))
-    (and (eq (branch-info-result-type source-info)
-             (branch-info-result-type receiving-info))
-         (valid-tree-p fragment))))
+  (declare (ignore source-info))
+  (typed-tree-type fragment receiving-info program))
 
 (defun collect-valid-pointers (body branch-index fragment
                                source-info receiving-info program)
-  (when (valid-crossover-fragment-p
-         fragment source-info receiving-info program)
-    (let ((wrapper (list (copy-tree body)))
-          (points nil))
-      (labels ((walk (tree pointer root-p)
-                 (push (cons branch-index (if root-p :root pointer))
-                       points)
-                 (when (consp tree)
-                   (loop for tail on (rest tree)
-                         do (walk (first tail) tail nil)))))
-        (walk (first wrapper) wrapper t))
-      (nreverse points))))
+  (let ((fragment-type
+          (valid-crossover-fragment-p
+           fragment source-info receiving-info program)))
+    (when fragment-type
+      (let ((wrapper (list body))
+            (points nil))
+        (labels ((walk (tree pointer root-p)
+                   (when (eq (typed-tree-type tree receiving-info program)
+                             fragment-type)
+                     (push (cons branch-index (if root-p :root pointer))
+                           points))
+                   (when (consp tree)
+                     (loop for tail on (rest tree)
+                           do (walk (first tail) tail nil)))))
+          (walk (first wrapper) wrapper t))
+        (nreverse points)))))
 
 (defun apply-crossover-point (program point fragment)
   (let ((branch-index (car point))
@@ -975,13 +1319,21 @@
                  (if receiving-point
                      (let* ((wrapper (list body))
                             (pointer (get-subtree
-                                      body wrapper receiving-point)))
-                       (when (and pointer
-                                  (valid-crossover-fragment-p
-                                   fragment
-                                   source-info
-                                   receiving-info
-                                   new-program))
+                                      body wrapper receiving-point))
+                            (fragment-type
+                              (and pointer
+                                   (valid-crossover-fragment-p
+                                    fragment
+                                    source-info
+                                    receiving-info
+                                    new-program)))
+                            (node (if (eq pointer wrapper)
+                                      (first wrapper)
+                                      (first pointer))))
+                       (when (and fragment-type
+                                  (eq (typed-tree-type
+                                       node receiving-info new-program)
+                                      fragment-type))
                          (push (cons branch-index
                                      (if (eq pointer wrapper)
                                          :root
@@ -1149,4 +1501,4 @@
      fitness-function
      parameter-definer
      termination-predicate
-     #'breed-architecture-altering-population)))
+     :breeding-function #'breed-architecture-altering-population)))

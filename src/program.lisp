@@ -3,24 +3,33 @@
 (defstruct (branch-info
              (:constructor make-branch-info
                  (&key name kind arity formals function-set
-                       function-argument-map terminal-set
-                       (result-type :boolean) allowed-branch-indices)))
-  "Architecture metadata for one branch of an ADF program."
+                       function-argument-map function-types terminal-set
+                       terminal-types (result-type :boolean)
+                       allowed-branch-indices
+                       iteration-source iteration-variable
+                       iteration-index-variable)))
+  "Architecture metadata for one branch of a multi-part program."
   name
   kind
   arity
   formals
   function-set
   function-argument-map
+  function-types
   terminal-set
+  terminal-types
   result-type
-  allowed-branch-indices)
+  allowed-branch-indices
+  iteration-source
+  iteration-variable
+  iteration-index-variable)
 
 (defstruct (adf-program
-             (:constructor %make-adf-program (adfs rpb branch-info))
+             (:constructor %make-adf-program (adfs adis rpb branch-info))
              (:copier nil)
              (:print-object print-adf-program))
   adfs
+  adis
   rpb
   branch-info)
 
@@ -29,14 +38,17 @@
                            (adf1 nil adf1-supplied-p)
                            rpb
                            (adfs nil adfs-supplied-p)
+                           (adis nil adis-supplied-p)
                            (branch-info nil branch-info-supplied-p))
-  "Creates an overall program with ADF0 ... ADF(N-1) and an RPB.
+  "Creates an overall program with ADF0 ... ADF(N-1), optionally
+   ADI0 ... ADI(M-1), and an RPB.
 
    The legacy keyword form :ADF0, :ADF1 and :RPB creates a two-ADF
    program.  The keyword form :ADFS and :RPB creates a program with an
    arbitrary number of ADFs.  Passing :ADFS NIL creates a program with
-   no ADFs.  BRANCH-INFO, when supplied, is a vector of BRANCH-INFO
-   structures in branch order, with the RPB last."
+   no ADFs.  :ADIS supplies automatically defined iterations.  BRANCH-INFO,
+   when supplied, is a vector of BRANCH-INFO structures in ADF, ADI, RPB
+   order."
   (when (and adfs-supplied-p (or adf0-supplied-p adf1-supplied-p))
     (error "Cannot combine :ADFS with :ADF0 or :ADF1."))
   (%make-adf-program
@@ -46,6 +58,9 @@
           (vector adf0 adf1))
          (t
           (vector nil nil)))
+   (if adis-supplied-p
+       (copy-seq (coerce adis 'vector))
+       (vector))
    rpb
    (if branch-info-supplied-p
        (copy-seq (coerce branch-info 'vector))
@@ -54,6 +69,7 @@
 (defun copy-adf-program (program)
   "Returns a copy of PROGRAM with independent branch and metadata vectors."
   (%make-adf-program (copy-seq (adf-program-adfs program))
+                     (copy-seq (adf-program-adis program))
                      (adf-program-rpb program)
                      (copy-seq (adf-program-branch-info program))))
 
@@ -98,31 +114,69 @@
       (error "No ADF with index ~S in PROGRAM." index))
     (setf (aref adfs index) new-body)))
 
+(defun adf-program-adi (program index)
+  "Returns the body of ADI INDEX from PROGRAM."
+  (let ((adis (adf-program-adis program)))
+    (unless (and (integerp index)
+                 (<= 0 index)
+                 (< index (length adis)))
+      (error "No ADI with index ~S in PROGRAM." index))
+    (aref adis index)))
+
+(defun (setf adf-program-adi) (new-body program index)
+  (let ((adis (adf-program-adis program)))
+    (unless (and (integerp index)
+                 (<= 0 index)
+                 (< index (length adis)))
+      (error "No ADI with index ~S in PROGRAM." index))
+    (setf (aref adis index) new-body)))
+
 (defun adf-program-branch-count (program)
-  "Returns the number of ADFs in PROGRAM, not counting the RPB."
+  "Returns the number of ADFs in PROGRAM, not counting ADIs or the RPB."
   (length (adf-program-adfs program)))
 
+(defun adf-program-adi-count (program)
+  "Returns the number of ADIs in PROGRAM."
+  (length (adf-program-adis program)))
+
+(defun adf-program-work-branch-count (program)
+  "Returns the number of non-RPB branches: ADFs plus ADIs."
+  (+ (adf-program-branch-count program)
+     (adf-program-adi-count program)))
+
+(defun adi-name-p (name)
+  (and (> (length name) 3)
+       (string= name "ADI" :end1 3)
+       (every #'digit-char-p (subseq name 3))))
+
 (defun branch-index (branch)
-  "Returns the ADF index for BRANCH, or :RPB for the result-producing
-   branch."
+  "Returns the ADF index for BRANCH, (:ADI . INDEX) for an ADI, or
+   :RPB for the result-producing branch."
   (etypecase branch
     (integer branch)
     (symbol
-     (if (eq branch :rpb)
-         :rpb
-         (let ((name (symbol-name branch)))
-           (unless (and (> (length name) 3)
-                        (string= name "ADF" :end1 3)
-                        (every #'digit-char-p (subseq name 3)))
-             (error "Unknown branch ~S." branch))
-           (parse-integer name :start 3))))))
+     (cond
+       ((eq branch :rpb) :rpb)
+       (t
+        (let ((name (symbol-name branch)))
+          (cond
+            ((and (> (length name) 3)
+                  (string= name "ADF" :end1 3)
+                  (every #'digit-char-p (subseq name 3)))
+             (parse-integer name :start 3))
+            ((adi-name-p name)
+             (cons :adi (parse-integer name :start 3)))
+            (t
+             (error "Unknown branch ~S." branch)))))))))
 
 (defun branch-info-index (program branch)
   "Returns the index of BRANCH in PROGRAM's BRANCH-INFO vector."
   (let ((index (branch-index branch)))
-    (if (eq index :rpb)
-        (adf-program-branch-count program)
-        index)))
+    (cond ((eq index :rpb)
+           (adf-program-work-branch-count program))
+          ((consp index)
+           (+ (adf-program-branch-count program) (cdr index)))
+          (t index))))
 
 (defun program-branch-info (program branch)
   "Returns the BRANCH-INFO for BRANCH, or NIL when PROGRAM has no
@@ -139,16 +193,21 @@
   (let ((info (program-branch-info program branch)))
     (if info
         (branch-info-formals info)
-        (if (eq (branch-index branch) :rpb)
-            nil
-            (loop for index below default-adf-arity
-                  collect (intern (format nil "ARG~D" index)
-                                  :keyword))))))
+        (let ((index (branch-index branch)))
+          (cond ((eq index :rpb) nil)
+                ((consp index)
+                 (loop for argument-index below 1
+                       collect (intern (format nil "ARG~D" argument-index)
+                                       :keyword)))
+                (t
+                 (loop for index below default-adf-arity
+                       collect (intern (format nil "ARG~D" index)
+                                       :keyword))))))))
 
 (defun valid-branch-info-p (info)
   "Returns true when INFO has the minimum metadata needed by the kernel."
   (and (branch-info-p info)
-       (member (branch-info-kind info) '(:adf :rpb))
+       (member (branch-info-kind info) '(:adf :adi :rpb))
        (integerp (branch-info-arity info))
        (not (minusp (branch-info-arity info)))
        (listp (branch-info-formals info))
@@ -157,9 +216,18 @@
        (listp (branch-info-function-argument-map info))
        (= (length (branch-info-function-set info))
           (length (branch-info-function-argument-map info)))
+       (listp (branch-info-function-types info))
        (listp (branch-info-terminal-set info))
+       (listp (branch-info-terminal-types info))
        (or (null (branch-info-allowed-branch-indices info))
-           (listp (branch-info-allowed-branch-indices info)))))
+           (listp (branch-info-allowed-branch-indices info)))
+       (or (not (eq (branch-info-kind info) :adi))
+           (and (or (null (branch-info-iteration-source info))
+                    (symbolp (branch-info-iteration-source info)))
+                (or (null (branch-info-iteration-variable info))
+                    (symbolp (branch-info-iteration-variable info)))
+                (or (null (branch-info-iteration-index-variable info))
+                    (symbolp (branch-info-iteration-index-variable info)))))))
 
 (defparameter *branch-names* '(:adf0 :adf1 :rpb)
   "The legacy branch names of an overall program with two ADFs.")
@@ -172,23 +240,31 @@
   (if program
       (append (loop for index below (adf-program-branch-count program)
                     collect (intern (format nil "ADF~D" index) :keyword))
+              (loop for index below (adf-program-adi-count program)
+                    collect (intern (format nil "ADI~D" index) :keyword))
               '(:rpb))
       *branch-names*))
 
 (defun program-branch (program branch)
   "Returns the body of the branch named BRANCH from PROGRAM."
   (let ((index (branch-index branch)))
-    (if (eq index :rpb)
-        (adf-program-rpb program)
-        (adf-program-adf program index))))
+    (cond ((eq index :rpb)
+           (adf-program-rpb program))
+          ((consp index)
+           (adf-program-adi program (cdr index)))
+          (t
+           (adf-program-adf program index)))))
 
 (defun replace-program-branch (program branch new-body)
   "Destructively replaces the body of BRANCH in PROGRAM and returns
    PROGRAM."
   (let ((index (branch-index branch)))
-    (if (eq index :rpb)
-        (setf (adf-program-rpb program) new-body)
-        (setf (adf-program-adf program index) new-body)))
+    (cond ((eq index :rpb)
+           (setf (adf-program-rpb program) new-body))
+          ((consp index)
+           (setf (adf-program-adi program (cdr index)) new-body))
+          (t
+           (setf (adf-program-adf program index) new-body))))
   program)
 
 (defun map-program-branches (function program)
@@ -205,31 +281,49 @@
    BRANCH with NEW-BRANCH-SUBTREE."
   (let* ((index (branch-index branch))
          (adfs (adf-program-adfs program-to-copy))
-         (branch-info (copy-seq (adf-program-branch-info program-to-copy))))
-    (if (eq index :rpb)
-        (%make-adf-program
-         (map 'vector #'copy-tree adfs)
-         new-branch-subtree
-         branch-info)
-        (progn
-          (unless (and (integerp index)
-                       (<= 0 index)
-                       (< index (length adfs)))
-            (error "No ADF with index ~S in PROGRAM." index))
-          (let ((new-adfs (map 'vector #'copy-tree adfs)))
-            (setf (aref new-adfs index) new-branch-subtree)
-            (%make-adf-program
-             new-adfs
-             (copy-tree (adf-program-rpb program-to-copy))
-             branch-info))))))
+         (adis (adf-program-adis program-to-copy))
+         (branch-info (copy-seq (adf-program-branch-info program-to-copy)))
+         (new-adfs (map 'vector #'copy-tree adfs))
+         (new-adis (map 'vector #'copy-tree adis)))
+    (cond
+      ((eq index :rpb)
+       (%make-adf-program
+        new-adfs new-adis new-branch-subtree branch-info))
+      ((consp index)
+       (unless (< (cdr index) (length adis))
+         (error "No ADI with index ~S in PROGRAM." (cdr index)))
+       (setf (aref new-adis (cdr index)) new-branch-subtree)
+       (%make-adf-program
+        new-adfs new-adis
+        (copy-tree (adf-program-rpb program-to-copy))
+        branch-info))
+      (t
+       (unless (and (integerp index)
+                    (<= 0 index)
+                    (< index (length adfs)))
+         (error "No ADF with index ~S in PROGRAM." index))
+       (setf (aref new-adfs index) new-branch-subtree)
+       (%make-adf-program
+        new-adfs new-adis
+        (copy-tree (adf-program-rpb program-to-copy))
+        branch-info)))))
 
 (defun print-adf-program (program stream)
-  (let ((adfs (adf-program-adfs program)))
+  (let ((adfs (adf-program-adfs program))
+        (adis (adf-program-adis program)))
     (loop for index below (length adfs)
           for branch = (intern (format nil "ADF~D" index) :keyword)
           for body = (aref adfs index)
           do (format stream
                      "~&(defun ADF~D (~{~A~^ ~})~%  (values ~S))~%"
+                     index
+                     (mapcar #'symbol-name (branch-formals program branch))
+                     body))
+    (loop for index below (length adis)
+          for branch = (intern (format nil "ADI~D" index) :keyword)
+          for body = (aref adis index)
+          do (format stream
+                     "~&(defun ADI~D (~{~A~^ ~})~%  (values ~S))~%"
                      index
                      (mapcar #'symbol-name (branch-formals program branch))
                      body))

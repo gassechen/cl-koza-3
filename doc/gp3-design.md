@@ -17,13 +17,17 @@ subroutines:
 5. branch deletion
 6. argument deletion
 
-It also provides structure-preserving crossover with point typing and a run
-entry point, `run-architecture-altering-system`, that uses the operation
-fractions from Koza's Boolean even-5-parity run.
+It also provides structure-preserving crossover with point typing over
+`:boolean` and `:number`, typed ADF calls, a fixed automatically defined
+iteration (ADI) core, and a run entry point,
+`run-architecture-altering-system`, that uses the operation fractions from
+Koza's Boolean even-5-parity run.
 
-The implementation does not include automatically defined iterations,
-loops, recursion, or storage (ADI, ADL, ADR, ADS), nor the GPPS, analog
-circuit, evolvable-hardware, or biology material from the books.
+The ADI core iterates each ADI over an external sequence and exposes the
+current element and zero-based index. The architecture-altering operations
+are not yet ADI-aware. The implementation does not include loops,
+recursion, or storage (ADL, ADR, ADS), nor the GPPS, analog circuit,
+evolvable-hardware, or biology material from the books.
 
 ## Program representation
 
@@ -31,40 +35,75 @@ An `adf-program` contains:
 
 - `adfs`: a vector of function-defining branch bodies in `ADF0 … ADF(N-1)`
   order
+- `adis`: a vector of iteration-defining branch bodies in `ADI0 … ADI(M-1)`
+  order
 - `rpb`: the result-producing branch
 - `branch-info`: a vector of `branch-info` records in
-  `ADF0 … ADF(N-1), RPB` order
+  `ADF0 … ADF(N-1), ADI0 … ADI(M-1), RPB` order
 
 Each `branch-info` records the branch name and kind, arity, formal
-arguments, function set and function-argument map, terminal set, result
-type, and allowed ADF references. The metadata is part of the program, so
-programs with different architectures can coexist in one population.
+arguments, function set and function-argument map, function types, terminal
+set and terminal types, result type, and allowed ADF references. ADI
+metadata also records the iteration source, element variable, and index
+variable. The metadata is part of the program, so programs with different
+architectures can coexist in one population.
 
-ADF invocation uses lexical scope. An ADF body sees bindings for its own
-formal arguments (`ARG0`, `ARG1`, …) and never inherits the caller's
-environment. ADF calls are resolved by branch index, using the `ADF<N>`
-symbol name.
+ADF and ADI invocation use lexical scope. An ADF body sees bindings for its
+own formal arguments (`ARG0`, `ARG1`, …) and never inherits the caller's
+environment. An ADI body sees its state formals plus the current element and
+zero-based iteration index. ADF and ADI calls are resolved by branch index
+using the `ADF<N>` and `ADI<N>` symbol names. An ADI starts from its call
+arguments, evaluates its body once per element, updates the state to the
+body result, and returns the final state.
 
 ## Point typing
 
-Every branch has a result type, currently `:boolean` throughout the
-supplied examples. Crossover checks that the contributing branch and the
-receiving branch have the same result type. It then validates the
-contributing fragment against the receiving branch metadata:
+Branches carry a result type and optional function and terminal type
+metadata. The type system currently has two types:
+
+- `:boolean`
+- `:number`
+
+Function type entries have the form
+`(function result-type &rest argument-types)`. Terminal type entries are
+alists of `(terminal . type)`. Integer and floating-point random constants
+are `:number`. Branches with no type metadata retain the original Boolean
+behavior.
+
+`typed-tree-type` infers the type of a subtree under the receiving branch's
+metadata and returns `NIL` for an invalid subtree. It checks:
 
 - non-ADF function operators must occur in the receiving function set with
-  the correct arity
-- ADF calls must name an existing branch, occur in the receiving function
-  set, satisfy the branch arity, and be permitted by the receiving
-  branch's allowed ADF indices when that list is present
-- terminal symbols must occur in the receiving terminal set
+  the correct arity and declared argument types
+- ADF and ADI calls must name an existing branch, satisfy its arity, and
+  match the target branch's result type and formal-argument types; ADF calls
+  must also be permitted by the receiving branch's allowed ADF indices
+- terminal symbols must occur in the receiving terminal set and have the
+  expected type
 - numeric constants must be permitted by the receiving terminal set
 - recursively, every subexpression must pass the same checks
 
-For the Boolean examples every point has the same point type, so a valid
-fragment can be inserted at any point in a compatible receiving branch.
-This keeps the current implementation faithful to the supplied examples
-without introducing typed subtrees that the examples do not use.
+Point-typed crossover no longer requires the contributing and receiving
+branches to have the same result type. Instead, it computes the type of the
+contributing fragment and requires it to match the type of the receiving
+point. The receiving point is either selected explicitly or drawn from
+`collect-valid-pointers`, which filters points by the fragment type. For the
+Boolean examples every point still has type `:boolean`, so the original
+behavior is preserved.
+
+Typed random generation uses lookahead: a function is eligible only when all
+of its argument types can be generated within the remaining depth. This
+allows a Boolean branch without Boolean terminals to close through
+comparison functions, while preventing `AND`/`OR`/`NOT` from requiring a
+Boolean leaf at the depth limit.
+
+Typed ADF calls take their result type from the target branch and their
+argument types from the target branch's formals. Initial population
+generation passes the complete program metadata to the generator, so ADF
+calls are available while creating typed trees. Typed initial generation
+honors the configured full, grow, or ramped-half-and-half method. Typed
+mutation infers the selected point's type and regenerates that point with a
+subtree of the same type.
 
 ## Operations
 
@@ -97,9 +136,11 @@ Select a branch and a subtree within it. The subtree becomes the body of a
 new ADF. The selected subtree is replaced by a call to the new ADF. Nodes
 inside the new ADF body that are not constants are made formal arguments,
 so the new ADF has no free variables. The call passes those subtrees as
-arguments. The new ADF receives the function set and allowed ADF references
-of the branch it was extracted from, plus the new formal arguments in its
-terminal set. The value returned by the program is unchanged.
+arguments. The new ADF receives the function set, function types, terminal
+types, and allowed ADF references of the branch it was extracted from, plus
+the new formal arguments in its terminal set. Its result type is the type of
+the extracted subtree, and each new formal inherits the type of the
+designated subtree. The value returned by the program is unchanged.
 
 `*branch-creation-designation-probability*` controls whether constant
 subtrees are also designated as arguments. Non-constant terminal symbols
@@ -118,9 +159,11 @@ program is unchanged.
 
 Select an ADF and remove it. Renumber later `ADF<N>` branches and update
 function sets, ADF references, and allowed branch indices. Each invocation
-of the deleted branch is replaced by a randomly generated subtree using the
-containing branch's function and terminal sets. This operation can change
-the value returned by the program.
+of the deleted branch is replaced by a randomly generated subtree of the
+type expected by the containing branch. Deletion uses the same typed
+lookahead as typed subtree generation and passes temporary program metadata
+so replacement subtrees may contain ADF calls. This operation can change the
+value returned by the program.
 
 ### Argument deletion
 
@@ -131,7 +174,10 @@ argument from every call to the ADF. This operation can change the value
 returned by the program.
 
 Deletion regeneration uses `*max-depth-for-new-subtrees-in-mutants*` as the
-depth limit for newly generated subtrees.
+depth limit for newly generated subtrees and may include ADF calls available
+under the updated program metadata. The operation returns `NIL` when the
+updated branch cannot generate a subtree of the required type within that
+limit.
 
 ## Run loop
 
@@ -178,6 +224,14 @@ selected program is reproduced.
 The run uses Koza's minimalist initial architecture for even-5-parity: one
 two-argument `ADF0` plus the result-producing branch. Branch creation can
 grow additional ADFs from either `ADF0` or the result-producing branch.
+
+`run-adi-system` is the separate entry point for the fixed ADI core. Its
+problem function returns ADF specs, ADI specs, the RPB spec, and the same
+four run-control values as `run-adf-system`. ADI specs carry
+`:iteration-source`, `:iteration-variable`, and `:iteration-index-variable`
+metadata. The iteration source is looked up in the caller's environment and
+falls back to `*iteration-sequence*`. ADI branches default to one state
+formal.
 
 ## Island model
 
@@ -240,16 +294,25 @@ single-run illustration, not an estimate of success probability.
 
 ## Selected deviations and limitations
 
-- All point types are Boolean in the current examples.
+- The implemented point types are `:boolean` and `:number`; this is not the
+  full Koza type hierarchy.
+- ADI support is a fixed core. The six architecture-altering operations do
+  not yet preserve or manipulate ADIs, so they should not be used on
+  programs that contain them.
+- ADI iteration sequences are supplied externally; the kernel does not
+  evolve sequence constructors, loop bounds, or storage. ADL, ADR, ADS, and
+  recursion are not implemented.
+- Typed deletion returns `NIL` when the updated branch cannot generate a
+  subtree of the required type within the configured mutant-subtree depth.
 - The island model uses synchronous generation-boundary migration; Koza's
   original even-5-parity runs used asynchronous demes on a transputer mesh.
 - Architecture operation placement in each generation follows the existing
   kernel's deterministic fraction-window style rather than an independent
   random draw for every individual. The configured fractions therefore
   describe the composition of each generation.
-- Mutation is not used in the architecture-altering example. If the
-  configured fractions leave a remainder, the remainder is filled by
-  reproduction.
+- Mutation is not used in the architecture-altering example, although typed
+  mutation is implemented and tested. If the configured fractions leave a
+  remainder, the remainder is filled by reproduction.
 - Operation applicability depends on the selected program's architecture.
   Duplication, creation, and deletion operations fall back to reproduction
   when the selected program lacks the required ADF or formal argument.

@@ -64,6 +64,32 @@
                 :components ((:file "even-5-parity-architecture-altering"))))
   :in-order-to ((test-op (test-op "cl-koza-3/tests"))))
 
+
+(defsystem "cl-koza-3/examples/mixed-typed-regression"
+  :description "Koza III example: mixed Boolean/number regression with typed ADFs"
+  :version "0.1.0"
+  :author "Gastón Novita"
+  :license "MIT License (see COPYING)"
+  :depends-on ("cl-koza-3")
+  :serial t
+  :components ((:module "examples"
+                :serial t
+                :components ((:file "mixed-typed-regression"))))
+  :in-order-to ((test-op (test-op "cl-koza-3/tests"))))
+
+(defsystem "cl-koza-3/examples/adi-sequence-sum"
+  :description "Koza III example: sum a sequence with an automatically defined iteration"
+  :version "0.1.0"
+  :author "Gastón Novita"
+  :license "MIT License (see COPYING)"
+  :depends-on ("cl-koza-3")
+  :serial t
+  :components ((:module "examples"
+                :serial t
+                :components ((:file "adi-sequence-sum"))))
+  :in-order-to ((test-op (test-op "cl-koza-3/tests"))))
+
+
 (defsystem "cl-koza-3/tests"
   :description "Test suite for cl-koza-3"
   :version "0.1.0"
@@ -74,6 +100,8 @@
                "cl-koza-3/examples/even-5-parity-3-adfs"
                "cl-koza-3/examples/even-5-parity-n-adfs"
                "cl-koza-3/examples/even-5-parity-architecture-altering"
+               "cl-koza-3/examples/mixed-typed-regression"
+               "cl-koza-3/examples/adi-sequence-sum"
                "fiveam")
   :serial t
   :components ((:module "tests"
@@ -95,6 +123,9 @@
                              (:file "even-5-parity-test")
                              (:file "even-5-parity-3-adfs-test")
                              (:file "even-5-parity-n-adfs-test")
+                             (:file "mixed-typed-regression-test")
+                             (:file "adi-test")
+                             (:file "adi-example-test")
                              (:file "known-issues-test"))))
   :perform (test-op (op c)
              (unless (uiop:symbol-call :cl-koza-3.tests :run-tests)

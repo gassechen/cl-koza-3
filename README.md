@@ -11,26 +11,33 @@ Darwinian Invention and Problem Solving*.
 
 ### Status
 
-Phases 1-5 are complete: the fixed-architecture base, the six
+Phases 1-7 are complete: the fixed-architecture base, the six
 architecture-altering operations, point-typed crossover, the
-architecture-altering run loop, the design documentation, and the
-optional synchronous island model are in place.
+architecture-altering run loop, the design documentation, the optional
+synchronous island model, mixed Boolean/number point typing, and the fixed
+ADI core are in place.
 
-- ADF kernel with an arbitrary architecture of
-  **ADF0 … ADF(N-1) + RPB** (result-producing branch), where `N >= 0`.
-  With `N = 0`, a program consists only of the result-producing branch.
+- Kernel with an arbitrary architecture of
+  **ADF0 … ADF(N-1) + ADI0 … ADI(M-1) + RPB** (result-producing branch),
+  where `N >= 0` and `M >= 0`. With `N = M = 0`, a program consists only of
+  the result-producing branch.
 - Per-branch architecture metadata is stored in each `adf-program`:
   branch kind, arity, formal arguments, function set, function argument map,
-  terminal set, point type, and allowed hierarchical references.
-- ADF calls use lexical scope: an ADF body sees only its formal arguments,
-  not the caller's environment.
+  terminal set, function and terminal types, result type, and allowed
+  hierarchical references.
+- Fixed automatically defined iterations (**ADI0 … ADI(M-1)**) that iterate
+  over an external sequence. An ADI body sees its state formals, the current
+  element, and the zero-based iteration index.
+- ADF and ADI calls use lexical scope: a called body sees only its formal
+  arguments and, for ADIs, the iteration bindings, not the caller's
+  environment.
 - The legacy two-ADF program API and `run-genetic-programming-system`
   remain supported as compatibility layers.
 - Examples: **even-5-parity** with two ADFs, **even-5-parity-3-adfs**
   with three hierarchical ADFs, **even-5-parity-n-adfs** with a
-  configurable number of ADFs, and
-  **even-5-parity-architecture-altering** with Koza's evolutionary
-  architecture.
+  configurable number of ADFs, **even-5-parity-architecture-altering**
+  with Koza's evolutionary architecture, and
+  **mixed-typed-regression** with a Boolean ADF and a numeric ADF.
 - Parallel fitness evaluation and initial-population generation through
   `lparallel`, with deterministic results independent of worker count.
 - The six architecture-altering operations from Koza III: branch
@@ -38,7 +45,10 @@ optional synchronous island model are in place.
   branch deletion, and argument deletion. The four duplication/creation
   operations preserve program semantics; deletion operations regenerate
   affected references.
-- Structure-preserving crossover with point typing.
+- Structure-preserving crossover with point typing over `:boolean` and
+  `:number`, including typed ADF calls.
+- Typed initial generation for full, grow, and ramped-half-and-half runs,
+  plus typed mutation that preserves the selected point's type.
 - `run-architecture-altering-system` with the branch and argument
   duplication, creation, and deletion fractions used in Koza's run.
 - Optional island model with a two-dimensional torus, configurable deme
@@ -137,6 +147,7 @@ function branches followed by the result-producing branch:
 | Branch | Purpose |
 | --- | --- |
 | `ADF0 … ADF(N-1)` | Automatically defined functions |
+| `ADI0 … ADI(M-1)` | Automatically defined iterations |
 | `RPB` | Result-producing branch, the program's output |
 
 `N` may be zero, in which case the program contains only `RPB`. The kernel
@@ -150,19 +161,31 @@ parameterized example generalizes this pattern: `ADF(I)` may call
 `ADF0 … ADF(I-1)`, and the result-producing branch may call every ADF.
 
 Each branch has a `branch-info` record. These records are stored in the
-program's `branch-info` vector in `ADF0 … ADF(N-1), RPB` order and include:
+program's `branch-info` vector in `ADF0 … ADF(N-1), ADI0 … ADI(M-1), RPB`
+order and include:
 
-- `name` and `kind` (`:adf` or `:rpb`)
+- `name` and `kind` (`:adf`, `:adi`, or `:rpb`)
 - `arity` and `formals`
 - `function-set` and `function-argument-map`
+- `function-types`, optional entries of the form
+  `(function result-type &rest argument-types)`
 - `terminal-set`
-- `result-type`, the point type used by Koza's type system
+- `terminal-types`, an optional alist of `(terminal . type)`
+- `result-type`, the branch's point type
 - `allowed-branch-indices`
+- For ADIs: `iteration-source`, `iteration-variable`, and
+  `iteration-index-variable`
+
+Branches without type metadata keep the original Boolean behavior.
+`*integer-random-constant*` and `*floating-point-random-constant*` are
+typed as `:number`.
 
 The main program operations are exported from `cl-koza-3.program`:
 
-- `make-adf-program`, `adf-program-adfs`, `adf-program-adf`,
-  `adf-program-branch-count`, `adf-program-rpb`, `adf-program-branch-info`
+- `make-adf-program`, `adf-program-adfs`, `adf-program-adis`,
+  `adf-program-adf`, `adf-program-adi`, `adf-program-branch-count`,
+  `adf-program-adi-count`, `adf-program-work-branch-count`,
+  `adf-program-rpb`, `adf-program-branch-info`
 - Branch metadata: `branch-info`, `make-branch-info`, `program-branch-info`,
   `branch-formals`, `valid-branch-info-p`
 - Legacy accessors: `adf-program-adf0`, `adf-program-adf1`
@@ -173,9 +196,10 @@ The main program operations are exported from `cl-koza-3.program`:
 - `get-subtree`, `get-function-subtree`
 
 `make-adf-program` accepts `:adfs` (a list of branch bodies) together with
-`:rpb` and optional `:branch-info`. The legacy keywords `:adf0` and `:adf1`
-remain supported when `:adfs` is omitted; calling it with no arguments still
-creates a program with two `NIL` ADFs.
+`:rpb` and optional `:adis` and `:branch-info`. The metadata vector is in
+ADF, ADI, RPB order. The legacy keywords `:adf0` and `:adf1` remain supported
+when `:adfs` is omitted; calling it with no arguments still creates a program
+with two `NIL` ADFs.
 
 The generic tree interpreter is exported from `cl-koza-3.interpreter` and
 re-exported from `cl-koza-3`:
@@ -186,11 +210,13 @@ re-exported from `cl-koza-3`:
   program.
 
 Each evaluator accepts an `:environment` alist of terminal or argument
-bindings. ADF calls are resolved against the program's branch vector, so the
-interpreter does not use dynamically bound ADF variables. ADF bodies are
-lexically scoped: only their formal arguments are visible inside the body.
-It supports `AND`, `OR`, `IF`, and `PROGN` as special forms and calls other
-symbols as Common Lisp functions.
+bindings and an optional `:iteration-sequence`. ADF and ADI calls are
+resolved against the program's branch vector, so the interpreter does not
+use dynamically bound ADF variables. ADF bodies are lexically scoped: only
+their formal arguments are visible inside the body. ADI bodies also see the
+current iteration element and index. The evaluator supports `AND`, `OR`,
+`IF`, and `PROGN` as special forms and calls other symbols as Common Lisp
+functions.
 
 The generalized kernel entry point is exported from `cl-koza-3`:
 
@@ -228,15 +254,53 @@ A branch spec is created with:
 ```lisp
 (make-branch-spec :function-set-creator #'creator
                   :terminal-set-creator #'creator
-                  :arity 3)
+                  :arity 3
+                  :result-type :number)
 ```
 
 The `:arity` value is optional. ADFs default to three formal arguments
-(`ARG0`, `ARG1`, `ARG2`) and the RPB defaults to zero. The length of the first
+(`ARG0`, `ARG1`, `ARG2`) and the RPB defaults to zero. The `:result-type`
+value is optional and defaults to `:boolean`. The length of the first
 value determines the number of ADFs. `NIL` creates a program with no ADFs.
 The fitness function receives an `adf-program` and the
 fitness cases, and returns two values: the standardized fitness and the
 number of hits.
+
+#### Automatically defined iterations
+
+`run-adi-system` adds a second list of branch specs for `ADI0 … ADI(M-1)`.
+Its `problem-function` returns seven values:
+
+1. A list of branch specs for `ADF0 … ADF(N-1)`
+2. A list of branch specs for `ADI0 … ADI(M-1)`
+3. A branch spec for the result-producing branch
+4. Fitness-cases creator
+5. Fitness function
+6. Parameter definer
+7. Termination predicate
+
+ADI branch specs support the same creator protocol plus iteration metadata:
+
+```lisp
+(make-branch-spec :function-set-creator #'creator
+                  :terminal-set-creator #'creator
+                  :arity 1
+                  :result-type :number
+                  :iteration-source :data
+                  :iteration-variable :item
+                  :iteration-index-variable :index)
+```
+
+An ADI is called with one state argument per formal. The state starts from
+the call arguments and is updated to the body's result on every element.
+`iteration-source` names a binding in the caller's environment; when that
+binding is absent, the call falls back to the dynamic variable
+`*iteration-sequence*`. The sequence is a Common Lisp sequence, and each
+iteration binds the current element and its zero-based index. The ADI
+returns the final state.
+
+ADI support is a fixed core: the six architecture-altering operations are
+not yet ADI-aware.
 
 `run-genetic-programming-system` is the compatibility wrapper for the
 legacy two-ADF contract. Its `problem-function` returns ten values:
@@ -253,8 +317,12 @@ legacy two-ADF contract. Its `problem-function` returns ten values:
 10. Termination predicate
 
 A function-set creator returns two values: the function set and its argument
-map (the number of arguments expected by each function). A terminal-set
-creator returns the terminal set.
+map (the number of arguments expected by each function). It may return a
+third value: a list of typed function entries of the form
+`(function result-type &rest argument-types)`. A terminal-set creator
+returns the terminal set and may return a second value: an alist of
+`(terminal . type)`. For untyped branches, these return values may be
+omitted and all points default to `:boolean`.
 
 The parameter definer sets the kernel's dynamic variables, including:
 
@@ -398,6 +466,83 @@ from the result-producing branch.
 (cl-koza-3.examples.even-5-parity-n-adfs:verify-known-program 4)
 ```
 
+### Example: mixed Boolean/number regression
+
+The `mixed-typed-regression` example exercises point typing across two types.
+`ADF0` returns `:boolean` with two numeric arguments, `ADF1` returns
+`:number`, and the result-producing branch returns `:number`. The target
+function is:
+
+```lisp
+(if (< x y)
+    (+ (* x x) z)
+    (- (* y y) z))
+```
+
+The known program is:
+
+```lisp
+(make-adf-program
+ :adfs (vector '(< arg0 arg1)
+               '(+ (* arg0 arg0) arg1))
+ :rpb '(if-number (adf0 x y) (adf1 x z) (- (* y y) z)))
+```
+
+The example uses 27 fitness cases with `x`, `y`, and `z` ranging over
+`{0, 1, 2}`. A small run can be started with:
+
+```lisp
+(asdf:load-system "cl-koza-3/examples/mixed-typed-regression")
+
+(cl-koza-3.examples.mixed-typed-regression:run-example
+ :maximum-generations 2
+ :size-of-population 12
+ :seed 1.0)
+```
+
+Crossover can therefore move a Boolean test into `if-number`'s test position
+or a numeric expression into an arithmetic argument position, but not the
+reverse.
+
+### Example: summing a sequence with an ADI
+
+The `adi-sequence-sum` example exercises the fixed ADI core. `ADI0` iterates
+over a sequence supplied in the fitness environment, and the target includes
+both the current element and its zero-based index. The expected value for a
+sequence is:
+
+```lisp
+(+ (reduce #'+ sequence)
+   (/ (* (length sequence) (1- (length sequence))) 2))
+```
+
+The known program is:
+
+```lisp
+(make-adf-program
+ :adfs nil
+ :adis (list '(+ arg0 item index))
+ :rpb '(adi0 0)
+ :branch-info ...)
+```
+
+Here `arg0` is the ADI state, `item` is the current sequence element, and
+`index` is the iteration index. Verify the known program and run a small
+evolutionary smoke test with:
+
+```lisp
+(asdf:load-system "cl-koza-3/examples/adi-sequence-sum")
+
+(cl-koza-3.examples.adi-sequence-sum:verify-known-program)
+
+(cl-koza-3.examples.adi-sequence-sum:run-example
+ :maximum-generations 10
+ :size-of-population 100
+ :seed 1.0)
+```
+
+The known program reports zero standardized fitness and six hits.
+
 ### Architecture-altering operations
 
 The six architecture-altering operations are exported from `cl-koza-3`.
@@ -415,11 +560,14 @@ Each returns a new program, or `NIL` when the operation is not applicable:
 Branch duplication, argument duplication, branch creation, and argument
 creation preserve the value returned by the program. Branch deletion and
 argument deletion regenerate affected references at random and can change
-the program's value.
+the program's value. Typed deletion regeneration receives temporary program
+metadata, so replacement subtrees may contain ADF calls.
 
 Point-typed crossover inserts a fragment from one program into a branch of
-another program, checking result type, function-set membership, arity,
-terminal-set membership, ADF references, and numeric constants:
+another program. The fragment is checked against the receiving branch's
+metadata: its type must match the type of the receiving point, and
+function-set membership, arity, terminal-set membership, ADF references, and
+numeric constants must all be valid:
 
 ```lisp
 (crossover-with-point-typing contributing receiving
@@ -511,7 +659,7 @@ The test suite uses FiveAM and is registered as `cl-koza-3/tests`:
 At the time of writing the suite reports:
 
 ```text
-Pass: 3142 (99%)
+Pass: 3297 (99%)
 Skip: 2 ( 0%)
 Fail: 0 ( 0%)
 ```
@@ -537,13 +685,19 @@ The two skipped tests document known issues:
   example.
 - **Phase 5 (done):** optional synchronous island model with torus
   migration and Koza's 64-deme configuration.
+- **Phase 6 (done):** mixed Boolean/number point typing, typed ADF calls,
+  typed subtree generation for full/grow/ramped runs, typed mutation, and the
+  mixed-typed-regression example.
+- **Phase 7 (done):** fixed ADI core with external iteration sequences,
+  state formals, iteration element/index bindings, `run-adi-system`, the
+  `adi-sequence-sum` example, and ADI branch generation/evaluation tests.
 
 ### Project layout
 
 ```text
 cl-koza-3.asd          ASDF systems
 src/                    Koza III kernel and architecture-altering operations
-examples/               Even-5-parity examples, including architecture-altering
+examples/               Even-5-parity, mixed Boolean/number, and ADI examples
 doc/                    Design notes
 tests/                  FiveAM test suite
 ```

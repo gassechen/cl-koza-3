@@ -76,15 +76,25 @@
 (defstruct branch-spec
   function-set-creator
   terminal-set-creator
-  arity)
+  arity
+  (result-type :boolean)
+  iteration-source
+  iteration-variable
+  iteration-index-variable)
 
 (defstruct resolved-branch
   function-set
   argument-map
+  function-types
   terminal-set
+  terminal-types
   terminal-set-creator
   arity
-  formals)
+  (result-type :boolean)
+  formals
+  iteration-source
+  iteration-variable
+  iteration-index-variable)
 
 (defun funcallable-designator-p (object)
   (or (functionp object)
@@ -214,20 +224,35 @@
            (branch-spec-terminal-set-creator spec))
     (error "~A terminal-set creator must be a function designator."
            description))
-  (let ((arity (branch-spec-arity spec)))
+  (let ((arity (branch-spec-arity spec))
+        (result-type (branch-spec-result-type spec)))
     (unless (or (null arity)
                 (and (integerp arity)
                      (not (minusp arity))))
       (error "~A arity must be a non-negative integer or NIL, not ~S."
-             description arity)))
+             description arity))
+    (unless (and result-type (symbolp result-type))
+      (error "~A result type must be a non-NIL symbol, not ~S."
+             description result-type))
+    (dolist (entry (list (branch-spec-iteration-source spec)
+                         (branch-spec-iteration-variable spec)
+                         (branch-spec-iteration-index-variable spec)))
+      (unless (or (null entry) (symbolp entry))
+        (error "~A iteration metadata must be a symbol or NIL, not ~S."
+               description entry))))
   spec)
 
-(defun validate-branch-specs (adf-specs rpb-spec)
+(defun validate-branch-specs (adf-specs rpb-spec &optional adi-specs)
   (unless (listp adf-specs)
     (error "ADF specs must be a list, not ~S." adf-specs))
+  (unless (listp adi-specs)
+    (error "ADI specs must be a list, not ~S." adi-specs))
   (loop for spec in adf-specs
         for index from 0
         do (validate-branch-spec spec (format nil "ADF~D" index)))
+  (loop for spec in adi-specs
+        for index from 0
+        do (validate-branch-spec spec (format nil "ADI~D" index)))
   (validate-branch-spec rpb-spec "RPB"))
 
 (defun run-genetic-programming-system (problem-function
@@ -331,31 +356,90 @@
                 parameter-definer
                 termination-predicate)))
 
+(defun run-adi-system (problem-function
+                       seed
+                       maximum-generations
+                       size-of-population
+                       &rest seeded-programs)
+  "Runs genetic programming with automatically defined iterations.
+
+   PROBLEM-FUNCTION must return seven values:
+
+     1. a list of BRANCH-SPEC objects for ADF0 ... ADF(N-1)
+     2. a list of BRANCH-SPEC objects for ADI0 ... ADI(M-1)
+     3. a BRANCH-SPEC object for the result-producing branch
+     4. creator of the fitness cases
+     5. fitness function
+     6. parameter definer
+     7. termination predicate
+
+   ADI branches iterate over the sequence obtained from their
+   ITERATION-SOURCE binding in the fitness environment.  Each ADI body
+   sees its state formals, the current iteration element, and the
+   zero-based iteration index."
+  (validate-run-arguments problem-function
+                          seed
+                          maximum-generations
+                          size-of-population)
+  (initialize-run seed)
+  (multiple-value-bind (adf-specs
+                        adi-specs
+                        rpb-spec
+                        fitness-cases-creator
+                        fitness-function
+                        parameter-definer
+                        termination-predicate)
+      (funcall problem-function)
+    (validate-branch-specs adf-specs rpb-spec adi-specs)
+    (run-system adf-specs
+                rpb-spec
+                maximum-generations
+                size-of-population
+                seeded-programs
+                fitness-cases-creator
+                fitness-function
+                parameter-definer
+                termination-predicate
+                :adi-specs adi-specs)))
+
 (defun resolve-branch-spec (spec default-arity)
-  (multiple-value-bind (function-set argument-map)
+  (multiple-value-bind (function-set argument-map function-types)
       (funcall (branch-spec-function-set-creator spec))
     (let ((arity (or (branch-spec-arity spec) default-arity)))
       (make-resolved-branch
        :function-set function-set
        :argument-map argument-map
+       :function-types function-types
        :terminal-set-creator (branch-spec-terminal-set-creator spec)
        :arity arity
+       :result-type (branch-spec-result-type spec)
        :formals (loop for index below arity
                       collect (intern (format nil "ARG~D" index)
-                                      :keyword))))))
+                                      :keyword))
+       :iteration-source (branch-spec-iteration-source spec)
+       :iteration-variable (branch-spec-iteration-variable spec)
+       :iteration-index-variable
+       (branch-spec-iteration-index-variable spec)))))
 
-(defun resolve-branch-specs (adf-specs rpb-spec)
+(defun resolve-branch-specs (adf-specs rpb-spec &optional adi-specs)
   (values (loop for spec in adf-specs
                 collect (resolve-branch-spec spec 3))
-          (resolve-branch-spec rpb-spec 0)))
+          (resolve-branch-spec rpb-spec 0)
+          (loop for spec in adi-specs
+                collect (resolve-branch-spec spec 1))))
 
-(defun resolve-terminal-sets (adf-branches rpb-branch)
-  (dolist (branch adf-branches)
-    (setf (resolved-branch-terminal-set branch)
-          (funcall (resolved-branch-terminal-set-creator branch))))
-  (setf (resolved-branch-terminal-set rpb-branch)
-        (funcall (resolved-branch-terminal-set-creator rpb-branch)))
-  (values adf-branches rpb-branch))
+(defun resolve-terminal-sets (adf-branches rpb-branch &optional adi-branches)
+  (labels ((resolve (branch)
+             (multiple-value-bind (terminal-set terminal-types)
+                 (funcall (resolved-branch-terminal-set-creator branch))
+               (setf (resolved-branch-terminal-set branch) terminal-set)
+               (setf (resolved-branch-terminal-types branch) terminal-types))))
+    (dolist (branch adf-branches)
+      (resolve branch))
+    (dolist (branch adi-branches)
+      (resolve branch))
+    (resolve rpb-branch))
+  (values adf-branches rpb-branch adi-branches))
 
 (defun make-branch-info-for-resolved (resolved name kind allowed-branch-indices)
   (make-branch-info
@@ -365,14 +449,21 @@
    :formals (copy-list (resolved-branch-formals resolved))
    :function-set (copy-list (resolved-branch-function-set resolved))
    :function-argument-map (copy-list (resolved-branch-argument-map resolved))
+   :function-types (copy-tree (resolved-branch-function-types resolved))
    :terminal-set (copy-list (resolved-branch-terminal-set resolved))
-   :result-type :boolean
-   :allowed-branch-indices allowed-branch-indices))
+   :terminal-types (copy-tree (resolved-branch-terminal-types resolved))
+   :result-type (or (resolved-branch-result-type resolved) :boolean)
+   :allowed-branch-indices allowed-branch-indices
+   :iteration-source (resolved-branch-iteration-source resolved)
+   :iteration-variable (resolved-branch-iteration-variable resolved)
+   :iteration-index-variable
+   (resolved-branch-iteration-index-variable resolved)))
 
-(defun resolve-branch-infos (adf-branches rpb-branch)
-  "Builds a vector of BRANCH-INFO objects in ADF0 ... RPB order."
+(defun resolve-branch-infos (adf-branches rpb-branch &optional adi-branches)
+  "Builds a vector of BRANCH-INFO objects in ADF, ADI, RPB order."
   (let* ((adf-count (length adf-branches))
-         (infos (make-array (1+ adf-count))))
+         (adi-count (length adi-branches))
+         (infos (make-array (+ 1 adf-count adi-count))))
     (loop for branch in adf-branches
           for index from 0
           do (setf (aref infos index)
@@ -381,7 +472,17 @@
                     (intern (format nil "ADF~D" index) :keyword)
                     :adf
                     (loop for previous below index collect previous))))
-    (setf (aref infos adf-count)
+    (loop for branch in adi-branches
+          for index from adf-count
+          do (setf (aref infos index)
+                   (make-branch-info-for-resolved
+                    branch
+                    (intern (format nil "ADI~D" (- index adf-count))
+                            :keyword)
+                    :adi
+                    (loop for adf-index below adf-count
+                          collect adf-index))))
+    (setf (aref infos (+ adf-count adi-count))
           (make-branch-info-for-resolved
            rpb-branch :rpb :rpb
            (loop for index below adf-count collect index)))
@@ -396,22 +497,25 @@
                    fitness-function
                    parameter-definer
                    termination-predicate
-                   &optional (breeding-function #'breed-new-population))
-  (multiple-value-bind (adf-branches rpb-branch)
-      (resolve-branch-specs adf-specs rpb-spec)
+                   &key adi-specs
+                     (breeding-function #'breed-new-population))
+  (multiple-value-bind (adf-branches rpb-branch adi-branches)
+      (resolve-branch-specs adf-specs rpb-spec adi-specs)
     (funcall parameter-definer)
     (validate-deme-parameters size-of-population)
     (describe-parameters-for-run maximum-generations
                                  size-of-population
-                                 (length adf-branches))
-    (resolve-terminal-sets adf-branches rpb-branch)
+                                 (length adf-branches)
+                                 (length adi-branches))
+    (resolve-terminal-sets adf-branches rpb-branch adi-branches)
     (let ((fitness-cases (funcall fitness-cases-creator)))
       (if (= *number-of-demes* 1)
           (let ((population
                   (create-population-with-branches size-of-population
                                                    adf-branches
                                                    rpb-branch
-                                                   seeded-programs))
+                                                   seeded-programs
+                                                   :adi-branches adi-branches))
                 (new-programs (make-array size-of-population)))
             (execute-generations population
                                  new-programs
@@ -430,7 +534,8 @@
                                                  deme-size
                                                  adf-branches
                                                  rpb-branch
-                                                 seeded-programs))
+                                                 seeded-programs
+                                                 :adi-branches adi-branches))
                  (new-programs (make-array deme-size)))
             (execute-island-generations demes
                                         new-programs
@@ -487,7 +592,7 @@
 
 (defun describe-parameters-for-run (maximum-generations
                                     size-of-population
-                                    &optional number-of-adfs)
+                                    &optional number-of-adfs number-of-adis)
   "Lists the parameter settings for this run."
   (format t "~2%Parameters used for this run.~
               ~%=============================")
@@ -496,6 +601,8 @@
   (format t "~%Size of Population:~50T~D" size-of-population)
   (when number-of-adfs
     (format t "~%Number of ADFs:~50T~D" number-of-adfs))
+  (when (and number-of-adis (plusp number-of-adis))
+    (format t "~%Number of ADIs:~50T~D" number-of-adis))
   (when (> *number-of-demes* 1)
     (format t "~%Number of demes:~50T~D" *number-of-demes*)
     (format t "~%Size of each deme:~50T~D"
@@ -589,24 +696,31 @@
              (- number-of-arguments 1) function-set argument-map
              terminal-set allowable-depth full-p))))
 
+(defun branch-generation-parameters
+    (individual-index minimum-depth-of-trees maximum-depth-of-trees
+     full-cycle-p)
+  "Returns the maximum depth and full/grow flag for one new branch."
+  (ecase *method-of-generation*
+    ((:full :grow)
+     (values maximum-depth-of-trees
+             (eq *method-of-generation* :full)))
+    (:ramped-half-and-half
+     (values (+ minimum-depth-of-trees
+                (mod individual-index
+                     (max 1 (- maximum-depth-of-trees
+                               minimum-depth-of-trees))))
+             full-cycle-p))))
+
 (defun create-program-branch (function-set argument-map terminal-set
                               minimum-depth-of-trees maximum-depth-of-trees
                               individual-index full-cycle-p)
   "Creates a complete branch for an ADF-containing program."
-  (create-individual-subtree
-   function-set argument-map terminal-set
-   (ecase *method-of-generation*
-     ((:full :grow) maximum-depth-of-trees)
-     (:ramped-half-and-half
-      (+ minimum-depth-of-trees
-         (mod individual-index
-              (max 1 (- maximum-depth-of-trees
-                        minimum-depth-of-trees))))))
-   t
-   (ecase *method-of-generation*
-     (:full t)
-     (:grow nil)
-     (:ramped-half-and-half full-cycle-p))))
+  (multiple-value-bind (depth full-p)
+      (branch-generation-parameters
+       individual-index minimum-depth-of-trees maximum-depth-of-trees
+       full-cycle-p)
+    (create-individual-subtree
+     function-set argument-map terminal-set depth t full-p)))
 
 (defun create-new-program (individual-index
                            full-cycle-p
@@ -614,31 +728,65 @@
                            maximum-depth-of-trees
                            adf-branches
                            rpb-branch
-                           branch-infos)
-  "Creates a new individual with an arbitrary number of ADFs."
-  (flet ((create-branch (branch)
-           (create-program-branch
-            (resolved-branch-function-set branch)
-            (resolved-branch-argument-map branch)
-            (resolved-branch-terminal-set branch)
-            minimum-depth-of-trees
-            maximum-depth-of-trees
-            individual-index
-            full-cycle-p)))
-    (make-adf-program
-     :adfs (map 'vector #'create-branch adf-branches)
-     :rpb (create-branch rpb-branch)
-     :branch-info branch-infos)))
+                           branch-infos
+                           &key adi-branches)
+  "Creates a new individual with an arbitrary number of ADFs and ADIs."
+  (let ((type-program
+          (make-adf-program
+           :adfs (make-array (length adf-branches) :initial-element nil)
+           :adis (make-array (length adi-branches) :initial-element nil)
+           :rpb nil
+           :branch-info branch-infos)))
+    (labels ((branch-parameters ()
+               (branch-generation-parameters
+                individual-index
+                minimum-depth-of-trees
+                maximum-depth-of-trees
+                full-cycle-p))
+             (create-branch (branch index)
+               (let ((info (aref branch-infos index)))
+                 (multiple-value-bind (depth full-p)
+                     (branch-parameters)
+                   (if (cl-koza-3.architecture::typed-branch-info-p info)
+                       (cl-koza-3.architecture::generate-random-typed-subtree
+                        info
+                        (branch-info-result-type info)
+                        depth
+                        type-program
+                        full-p)
+                       (create-program-branch
+                        (resolved-branch-function-set branch)
+                        (resolved-branch-argument-map branch)
+                        (resolved-branch-terminal-set branch)
+                        minimum-depth-of-trees
+                        maximum-depth-of-trees
+                        individual-index
+                        full-cycle-p))))))
+      (make-adf-program
+       :adfs (loop for branch in adf-branches
+                   for index from 0
+                   collect (create-branch branch index) into bodies
+                   finally (return (coerce bodies 'vector)))
+       :adis (loop for branch in adi-branches
+                   for index from (length adf-branches)
+                   collect (create-branch branch index) into bodies
+                   finally (return (coerce bodies 'vector)))
+       :rpb (create-branch rpb-branch
+                           (+ (length adf-branches)
+                              (length adi-branches)))
+       :branch-info branch-infos))))
 
 (defun program-uniquifier-key (program)
   (append (coerce (adf-program-adfs program) 'list)
+          (coerce (adf-program-adis program) 'list)
           (list (adf-program-rpb program))))
 
 (defun create-population-with-branches (size-of-population
                                         adf-branches
                                         rpb-branch
-                                        seeded-programs)
-  "Creates the population with an arbitrary number of ADF branches.
+                                        seeded-programs
+                                        &key adi-branches)
+  "Creates the population with an arbitrary number of ADF and ADI branches.
 
    Random programs are generated from deterministic per-individual
    seeds, so the initial population is reproducible regardless of the
@@ -653,7 +801,8 @@
          (base-seed *seed*)
          (generation-maximum-depth *max-depth-for-new-individuals*)
          (generation-method *method-of-generation*)
-         (branch-infos (resolve-branch-infos adf-branches rpb-branch)))
+         (branch-infos
+           (resolve-branch-infos adf-branches rpb-branch adi-branches)))
     (dotimes (individual-index seeded-count)
       (let ((program (nth individual-index seeded-programs)))
         (setf (adf-program-branch-info program)
@@ -680,7 +829,8 @@
                         (- *max-depth-for-new-individuals* 1)
                         adf-branches
                         rpb-branch
-                        branch-infos))
+                        branch-infos
+                        :adi-branches adi-branches))
                  (setf (aref states individual-index) *seed*))))
       (let ((random-count (- size-of-population seeded-count)))
         (cond ((zerop random-count))
@@ -723,7 +873,8 @@
                                      (- *max-depth-for-new-individuals* 1)
                                      adf-branches
                                      rpb-branch
-                                     branch-infos))
+                                     branch-infos
+                                     :adi-branches adi-branches))
                               (setf state *seed*)))
                            (t
                             (incf attempts-at-this-individual)
@@ -736,7 +887,8 @@
                                      (- *max-depth-for-new-individuals* 1)
                                      adf-branches
                                      rpb-branch
-                                     branch-infos))
+                                     branch-infos
+                                     :adi-branches adi-branches))
                               (setf state *seed*))))))
                  (setf (aref candidates individual-index) new-program
                        (aref states individual-index) state
@@ -749,7 +901,8 @@
                                 deme-size
                                 adf-branches
                                 rpb-branch
-                                seeded-programs)
+                                seeded-programs
+                                &key adi-branches)
   "Creates NUMBER-OF-DEMES populations of DEME-SIZE individuals.
    SEEDED-PROGRAMS are placed in the first deme only."
   (let ((demes (make-array number-of-demes)))
@@ -759,7 +912,8 @@
              deme-size
              adf-branches
              rpb-branch
-             (if (zerop deme-index) seeded-programs nil))))
+             (if (zerop deme-index) seeded-programs nil)
+             :adi-branches adi-branches)))
     demes))
 
 (defun flatten-demes (demes)
@@ -1190,13 +1344,12 @@
        (aref population index-of-selected-individual)))))
 
 (defun select-branch (within-program)
-  "Returns two values: a keyword denoting a branch selected at random
-   (biased by the number of points in that branch), and the subtree of
-   the selected branch."
-  (let* ((adfs (coerce (adf-program-adfs within-program) 'list))
-         (names (branch-names within-program))
-         (bodies (append adfs
-                         (list (adf-program-rpb within-program))))
+  "Returns two values: a branch selected at random (biased by the number
+   of points in that branch), and the subtree of the selected branch."
+  (let* ((names (branch-names within-program))
+         (bodies (mapcar (lambda (branch)
+                           (program-branch within-program branch))
+                         names))
          (points (mapcar #'count-crossover-points bodies))
          (selected-point (random-integer (reduce #'+ points))))
     (loop for name in names
@@ -1279,24 +1432,40 @@
 
 (defun mutate (program adf-branches rpb-branch)
   "Mutates PROGRAM by picking a random point in a random branch and
-   substituting a brand new subtree created in the same way as the
-   initial random population."
+   substituting a brand new subtree of the same point type."
   (multiple-value-bind (branch branch-tree) (select-branch program)
     (let* ((index (branch-index branch))
            (selected-branch
-             (if (eq index :rpb)
-                 rpb-branch
-                 (nth index adf-branches)))
+             (cond ((eq index :rpb) rpb-branch)
+                   ((integerp index) (nth index adf-branches))
+                   (t nil)))
+           (info (program-branch-info program branch))
            (mutation-point
              (random-integer (count-crossover-points branch-tree)))
+           (fragment
+             (nth-value 1
+                        (get-subtree branch-tree
+                                     (list branch-tree)
+                                     mutation-point)))
            (new-subtree
-             (create-individual-subtree
-              (resolved-branch-function-set selected-branch)
-              (resolved-branch-argument-map selected-branch)
-              (resolved-branch-terminal-set selected-branch)
-              *max-depth-for-new-subtrees-in-mutants*
-              t
-              nil)))
+             (cond
+               (info
+                (cl-koza-3.architecture::generate-random-subtree-of-type
+                 info
+                 (or (cl-koza-3.architecture::typed-tree-type
+                      fragment info program)
+                     (branch-info-result-type info))
+                 program))
+               (selected-branch
+                (create-individual-subtree
+                 (resolved-branch-function-set selected-branch)
+                 (resolved-branch-argument-map selected-branch)
+                 (resolved-branch-terminal-set selected-branch)
+                 *max-depth-for-new-subtrees-in-mutants*
+                 t
+                 nil))
+               (t
+                (error "No metadata for branch ~S." branch)))))
       (let ((new-branch (list (copy-tree branch-tree))))
         (multiple-value-bind (subtree-pointer fragment)
             (get-subtree (first new-branch) new-branch mutation-point)

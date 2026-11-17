@@ -97,8 +97,20 @@
   :depends-on ("cl-koza-3" "cl-koza-3/examples/adi-sequence-sum")
   :serial t
   :components ((:module "examples"
-                :serial t
-                :components ((:file "adi-architecture-altering"))))
+                 :serial t
+                 :components ((:file "adi-architecture-altering"))))
+  :in-order-to ((test-op (test-op "cl-koza-3/tests"))))
+
+(defsystem "cl-koza-3/examples/auxiliary-branches"
+  :description "Koza III example: ADL, ADR and ADS branches"
+  :version "0.1.0"
+  :author "Gastón Novita"
+  :license "MIT License (see COPYING)"
+  :depends-on ("cl-koza-3")
+  :serial t
+  :components ((:module "examples"
+                 :serial t
+                 :components ((:file "auxiliary-branches"))))
   :in-order-to ((test-op (test-op "cl-koza-3/tests"))))
 
 
@@ -113,9 +125,10 @@
                "cl-koza-3/examples/even-5-parity-n-adfs"
                "cl-koza-3/examples/even-5-parity-architecture-altering"
                "cl-koza-3/examples/mixed-typed-regression"
-               "cl-koza-3/examples/adi-sequence-sum"
-               "cl-koza-3/examples/adi-architecture-altering"
-               "fiveam")
+                "cl-koza-3/examples/adi-sequence-sum"
+                "cl-koza-3/examples/adi-architecture-altering"
+                "cl-koza-3/examples/auxiliary-branches"
+                "fiveam")
   :serial t
   :components ((:module "tests"
                 :serial t
@@ -137,9 +150,11 @@
                              (:file "even-5-parity-3-adfs-test")
                              (:file "even-5-parity-n-adfs-test")
                              (:file "mixed-typed-regression-test")
-                             (:file "adi-test")
-                             (:file "adi-example-test")
-                             (:file "known-issues-test"))))
+                              (:file "adi-test")
+                              (:file "adi-example-test")
+                              (:file "aux-test")
+                              (:file "aux-example-test")
+                              (:file "known-issues-test"))))
   :perform (test-op (op c)
              (unless (uiop:symbol-call :cl-koza-3.tests :run-tests)
                (error "cl-koza-3 test suite failed"))))

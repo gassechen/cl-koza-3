@@ -19,19 +19,21 @@ subroutines:
 
 It also provides structure-preserving crossover with point typing over
 `:boolean` and `:number`, typed ADF calls, an automatically defined iteration
-(ADI) core, and run entry points, `run-architecture-altering-system` and
+(ADI) core, ADL/ADR/ADS auxiliary branches, and run entry points,
+`run-architecture-altering-system` and
 `run-adi-architecture-altering-system`, that use the operation fractions from
 Koza's Boolean even-5-parity run.
 
 The ADI core iterates each ADI over an external sequence and exposes the
-current element and zero-based index. The architecture-altering operations
-preserve ADIs and update ADI calls and metadata when ADF branches change.
+current element and zero-based index. ADL repeats a body a control count of
+times, ADR recurses to a caller-supplied depth limit, and ADS reads and
+updates mutable cells. The architecture-altering operations preserve all
+auxiliary bodies and update calls and metadata when ADF branches change.
 `adi-creation` replaces a selected subtree with a call to a new ADI and uses
 that subtree as the new ADI's initial state. `adi-deletion` removes an ADI,
 regenerates calls to it, and renumbers later ADIs and their metadata. The
-implementation does not include loops, recursion, or storage (ADL, ADR, ADS),
-nor the GPPS, analog circuit, evolvable-hardware, or biology material from the
-books.
+implementation does not include the GPPS, analog circuit,
+evolvable-hardware, or biology material from the books.
 
 ## Program representation
 
@@ -39,26 +41,31 @@ An `adf-program` contains:
 
 - `adfs`: a vector of function-defining branch bodies in `ADF0 … ADF(N-1)`
   order
-- `adis`: a vector of iteration-defining branch bodies in `ADI0 … ADI(M-1)`
+- `adis`: a vector of auxiliary branch bodies in canonical
+  `ADI0 … ADI(M-1), ADL0 … ADL(K-1), ADR0 … ADR(R-1), ADS0 … ADS(S-1)`
   order
 - `rpb`: the result-producing branch
 - `branch-info`: a vector of `branch-info` records in
-  `ADF0 … ADF(N-1), ADI0 … ADI(M-1), RPB` order
+  `ADF0 … ADF(N-1), ADI0 … ADI(M-1), ADL0 … ADL(K-1),
+  ADR0 … ADR(R-1), ADS0 … ADS(S-1), RPB` order
 
 Each `branch-info` records the branch name and kind, arity, formal
 arguments, function set and function-argument map, function types, terminal
-set and terminal types, result type, and allowed ADF references. ADI
+set and terminal types, result type, and allowed ADF references. Auxiliary
 metadata also records the iteration source, element variable, and index
 variable. The metadata is part of the program, so programs with different
 architectures can coexist in one population.
 
-ADF and ADI invocation use lexical scope. An ADF body sees bindings for its
-own formal arguments (`ARG0`, `ARG1`, …) and never inherits the caller's
-environment. An ADI body sees its state formals plus the current element and
-zero-based iteration index. ADF and ADI calls are resolved by branch index
-using the `ADF<N>` and `ADI<N>` symbol names. An ADI starts from its call
-arguments, evaluates its body once per element, updates the state to the
-body result, and returns the final state.
+ADF and auxiliary invocation use lexical scope. An ADF body sees bindings for
+its own formal arguments (`ARG0`, `ARG1`, …) and never inherits the caller's
+environment. ADI and ADL bodies see their state formals plus iteration
+bindings; ADR bodies see the current recursion depth; ADS bodies see the
+current storage value. Calls are resolved by branch kind and index using the
+`ADF<N>`, `ADI<N>`, `ADL<N>`, `ADR<N>`, and `ADS<N>` symbol names. An ADI
+starts from its call arguments, evaluates its body once per element, updates
+the state to the body result, and returns the final state. ADL follows the
+same state protocol for a repeat count; ADR increments `*recursion-depth*`
+until the depth limit; ADS stores each body result in `*storage-cells*`.
 
 ## Point typing
 
@@ -79,7 +86,7 @@ metadata and returns `NIL` for an invalid subtree. It checks:
 
 - non-ADF function operators must occur in the receiving function set with
   the correct arity and declared argument types
-- ADF and ADI calls must name an existing branch, satisfy its arity, and
+- ADF and auxiliary calls must name an existing branch, satisfy its arity, and
   match the target branch's result type and formal-argument types; ADF calls
   must also be permitted by the receiving branch's allowed ADF indices
 - terminal symbols must occur in the receiving terminal set and have the
@@ -243,6 +250,14 @@ sequence, so nested ADI calls reuse it. ADI branches default to one state
 formal. ADI creation uses the metadata of the first initial ADI spec unless
 the dynamic creation defaults are overridden.
 
+`run-aux-system` accepts ADF, ADI, ADL, ADR, and ADS specs in that order,
+plus the RPB spec and the four run-control values. `run-adl-system`,
+`run-adr-system`, and `run-ads-system` are one-family wrappers with the
+seven-value `run-adi-system` contract. All auxiliary specs use the same
+iteration metadata fields; ADL interprets the source as a repeat count,
+ADR as a depth limit, and ADS as a storage-cell key. The `auxiliary-branches`
+example verifies a hand-built program that exercises all three families.
+
 ## Island model
 
 Runs use a single population when `*number-of-demes*` is `1`. For an
@@ -309,9 +324,9 @@ single-run illustration, not an estimate of success probability.
 - ADI creation adds a one-state-formal branch from an existing subtree. ADI
   deletion regenerates calls to the removed branch, so it can change program
   behavior and can leave new ADI bodies with a reduced function set.
-- ADI iteration sequences are supplied externally; the kernel does not
-  evolve sequence constructors, loop bounds, or storage. ADL, ADR, ADS, and
-  recursion are not implemented.
+- ADI iteration sequences, ADL counts, ADR depth limits, and ADS cell names
+  are supplied through the caller's environment; the kernel does not evolve
+  sequence constructors, loop bounds, or storage-cell constructors.
 - Typed deletion returns `NIL` when the updated branch cannot generate a
   subtree of the required type within the configured mutant-subtree depth.
 - The island model uses synchronous generation-boundary migration; Koza's

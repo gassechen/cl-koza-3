@@ -24,5 +24,7 @@
 
 (defun random-integer (n)
   "Returns a pseudo-random integer in the range 0 ---> n-1."
+  (unless (and (integerp n) (plusp n))
+    (error "Random-integer requires a positive integer, not ~S." n))
   (let ((random-number (random-floating-point-number 1.0)))
     (floor (* n random-number))))

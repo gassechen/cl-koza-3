@@ -39,11 +39,20 @@
    #:adf-program-adf1
    #:adf-program-adfs
    #:adf-program-adf
-   #:adf-program-adis
-   #:adf-program-adi
-   #:adf-program-branch-count
-   #:adf-program-adi-count
-   #:adf-program-work-branch-count
+    #:adf-program-adis
+    #:adf-program-adi
+    #:adf-program-adl
+    #:adf-program-adr
+    #:adf-program-ads
+    #:adf-program-aux
+    #:adf-program-aux-body
+    #:adf-program-aux-count
+    #:adf-program-branch-count
+    #:adf-program-adi-count
+    #:adf-program-adl-count
+    #:adf-program-adr-count
+    #:adf-program-ads-count
+    #:adf-program-work-branch-count
    #:adf-program-rpb
    #:adf-program-branch-info
    #:branch-index
@@ -65,9 +74,12 @@
 (defpackage #:cl-koza-3.interpreter
   (:use #:cl
         #:cl-koza-3.program)
-  (:export
-   #:*iteration-sequence*
-   #:evaluate-adf-tree
+   (:export
+    #:*iteration-sequence*
+    #:*recursion-depth*
+    #:*recursion-limit*
+    #:*storage-cells*
+    #:evaluate-adf-tree
    #:evaluate-adf-branch
    #:evaluate-adf-program))
 
@@ -95,11 +107,16 @@
    #:*best-of-run-individual*
    #:*generation-of-best-of-run-individual*
    #:run-genetic-programming-system
-   #:run-adf-system
-   #:run-adi-system
-   #:branch-spec
-   #:make-branch-spec
-   #:branch-spec-function-set-creator
+    #:run-adf-system
+    #:run-adi-system
+    #:run-aux-system
+    #:run-adl-system
+    #:run-adr-system
+    #:run-ads-system
+    #:branch-spec
+    #:make-branch-spec
+    #:branch-spec-kind
+    #:branch-spec-function-set-creator
    #:branch-spec-terminal-set-creator
    #:branch-spec-arity
    #:branch-spec-result-type
@@ -175,11 +192,16 @@
    #:*best-of-run-individual*
    #:*generation-of-best-of-run-individual*
    #:run-genetic-programming-system
-   #:run-adf-system
-   #:run-adi-system
-   #:branch-spec
-   #:make-branch-spec
-   #:branch-spec-function-set-creator
+    #:run-adf-system
+    #:run-adi-system
+    #:run-aux-system
+    #:run-adl-system
+    #:run-adr-system
+    #:run-ads-system
+    #:branch-spec
+    #:make-branch-spec
+    #:branch-spec-kind
+    #:branch-spec-function-set-creator
    #:branch-spec-terminal-set-creator
    #:branch-spec-arity
    #:branch-spec-result-type
@@ -213,19 +235,31 @@
    #:adf-program-adf1
    #:adf-program-adfs
    #:adf-program-adf
-   #:adf-program-adis
-   #:adf-program-adi
-   #:adf-program-branch-count
-   #:adf-program-adi-count
-   #:adf-program-work-branch-count
+    #:adf-program-adis
+    #:adf-program-adi
+    #:adf-program-adl
+    #:adf-program-adr
+    #:adf-program-ads
+    #:adf-program-aux
+    #:adf-program-aux-body
+    #:adf-program-aux-count
+    #:adf-program-branch-count
+    #:adf-program-adi-count
+    #:adf-program-adl-count
+    #:adf-program-adr-count
+    #:adf-program-ads-count
+    #:adf-program-work-branch-count
    #:adf-program-rpb
    #:adf-program-branch-info
    #:branch-info-index
    #:branch-formals
    #:program-branch-info
-   #:valid-branch-info-p
-   #:*iteration-sequence*
-   #:evaluate-adf-tree
+    #:valid-branch-info-p
+    #:*iteration-sequence*
+    #:*recursion-depth*
+    #:*recursion-limit*
+    #:*storage-cells*
+    #:evaluate-adf-tree
    #:evaluate-adf-branch
    #:evaluate-adf-program
    #:create-population

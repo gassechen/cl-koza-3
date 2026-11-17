@@ -11,11 +11,11 @@ Darwinian Invention and Problem Solving*.
 
 ### Status
 
-Phases 1-9 are complete: the fixed-architecture base, the six
+Phases 1-10 are complete: the fixed-architecture base, the six
 architecture-altering operations, point-typed crossover, the
 architecture-altering run loop, the design documentation, the optional
-synchronous island model, mixed Boolean/number point typing, and the ADI core
-with ADI creation/deletion are in place.
+synchronous island model, mixed Boolean/number point typing, the ADI core
+with ADI creation/deletion, and ADL/ADR/ADS auxiliary branches are in place.
 
 - Kernel with an arbitrary architecture of
   **ADF0 … ADF(N-1) + ADI0 … ADI(M-1) + RPB** (result-producing branch),
@@ -27,8 +27,12 @@ with ADI creation/deletion are in place.
   hierarchical references.
 - Automatically defined iterations (**ADI0 … ADI(M-1)**) that iterate over
   an external sequence. An ADI body sees its state formals, the current
-  element, and the zero-based iteration index. ADI branches can be created
-  and deleted during architecture-altering runs.
+   element, and the zero-based iteration index. ADI branches can be created
+   and deleted during architecture-altering runs.
+- Automatically defined loops (**ADL0 … ADL(K-1)**) repeat a body a control
+  count times, automatically defined recursion (**ADR0 … ADR(R-1)**) recurses
+  to a depth limit, and automatically defined storage (**ADS0 … ADS(S-1)**)
+  reads and updates mutable cells shared through the environment.
 - ADF and ADI calls use lexical scope: a called body sees only its formal
   arguments and, for ADIs, the iteration bindings, not the caller's
   environment.
@@ -37,8 +41,9 @@ with ADI creation/deletion are in place.
 - Examples: **even-5-parity** with two ADFs, **even-5-parity-3-adfs**
   with three hierarchical ADFs, **even-5-parity-n-adfs** with a
   configurable number of ADFs, **even-5-parity-architecture-altering**
-  with Koza's evolutionary architecture, and
-  **mixed-typed-regression** with a Boolean ADF and a numeric ADF.
+   with Koza's evolutionary architecture, **mixed-typed-regression** with a
+   Boolean ADF and a numeric ADF, and **auxiliary-branches** with ADL, ADR,
+   and ADS branches.
 - Parallel fitness evaluation and initial-population generation through
   `lparallel`, with deterministic results independent of worker count.
 - The six architecture-altering operations from Koza III: branch
@@ -150,6 +155,9 @@ function branches followed by the result-producing branch:
 | --- | --- |
 | `ADF0 … ADF(N-1)` | Automatically defined functions |
 | `ADI0 … ADI(M-1)` | Automatically defined iterations |
+| `ADL0 … ADL(K-1)` | Automatically defined loops |
+| `ADR0 … ADR(R-1)` | Automatically defined recursion |
+| `ADS0 … ADS(S-1)` | Automatically defined storage |
 | `RPB` | Result-producing branch, the program's output |
 
 `N` may be zero, in which case the program contains only `RPB`. The kernel
@@ -163,10 +171,11 @@ parameterized example generalizes this pattern: `ADF(I)` may call
 `ADF0 … ADF(I-1)`, and the result-producing branch may call every ADF.
 
 Each branch has a `branch-info` record. These records are stored in the
-program's `branch-info` vector in `ADF0 … ADF(N-1), ADI0 … ADI(M-1), RPB`
+program's `branch-info` vector in `ADF0 … ADF(N-1), ADI0 … ADI(M-1),
+ADL0 … ADL(K-1), ADR0 … ADR(R-1), ADS0 … ADS(S-1), RPB`
 order and include:
 
-- `name` and `kind` (`:adf`, `:adi`, or `:rpb`)
+- `name` and `kind` (`:adf`, `:adi`, `:adl`, `:adr`, `:ads`, or `:rpb`)
 - `arity` and `formals`
 - `function-set` and `function-argument-map`
 - `function-types`, optional entries of the form
@@ -175,7 +184,7 @@ order and include:
 - `terminal-types`, an optional alist of `(terminal . type)`
 - `result-type`, the branch's point type
 - `allowed-branch-indices`
-- For ADIs: `iteration-source`, `iteration-variable`, and
+- For auxiliary branches: `iteration-source`, `iteration-variable`, and
   `iteration-index-variable`
 
 Branches without type metadata keep the original Boolean behavior.
@@ -186,8 +195,13 @@ The main program operations are exported from `cl-koza-3.program`:
 
 - `make-adf-program`, `adf-program-adfs`, `adf-program-adis`,
   `adf-program-adf`, `adf-program-adi`, `adf-program-branch-count`,
-  `adf-program-adi-count`, `adf-program-work-branch-count`,
-  `adf-program-rpb`, `adf-program-branch-info`
+  `adf-program-adi-count`, `adf-program-adl-count`,
+  `adf-program-adr-count`, `adf-program-ads-count`,
+  `adf-program-work-branch-count`, `adf-program-rpb`,
+  `adf-program-branch-info`
+- Auxiliary bodies: `adf-program-aux`, `adf-program-aux-body`,
+  `adf-program-aux-count`, `adf-program-adl`, `adf-program-adr`,
+  `adf-program-ads`
 - Branch metadata: `branch-info`, `make-branch-info`, `program-branch-info`,
   `branch-formals`, `valid-branch-info-p`
 - Legacy accessors: `adf-program-adf0`, `adf-program-adf1`
@@ -198,8 +212,11 @@ The main program operations are exported from `cl-koza-3.program`:
 - `get-subtree`, `get-function-subtree`
 
 `make-adf-program` accepts `:adfs` (a list of branch bodies) together with
-`:rpb` and optional `:adis` and `:branch-info`. The metadata vector is in
-ADF, ADI, RPB order. The legacy keywords `:adf0` and `:adf1` remain supported
+`:rpb` and optional `:adis` and `:branch-info`. The `:adis` argument holds all
+auxiliary bodies in canonical ADI, ADL, ADR, ADS order; the dedicated
+`adf-program-adl`, `adf-program-adr`, and `adf-program-ads` accessors address
+each family. The metadata vector is in ADF, ADI, ADL, ADR, ADS, RPB order.
+The legacy keywords `:adf0` and `:adf1` remain supported
 when `:adfs` is omitted; calling it with no arguments still creates a program
 with two `NIL` ADFs.
 
@@ -212,13 +229,13 @@ re-exported from `cl-koza-3`:
   program.
 
 Each evaluator accepts an `:environment` alist of terminal or argument
-bindings and an optional `:iteration-sequence`. ADF and ADI calls are
-resolved against the program's branch vector, so the interpreter does not
-use dynamically bound ADF variables. ADF bodies are lexically scoped: only
-their formal arguments are visible inside the body. ADI bodies also see the
-current iteration element and index. The evaluator supports `AND`, `OR`,
-`IF`, and `PROGN` as special forms and calls other symbols as Common Lisp
-functions.
+bindings. ADF and auxiliary calls are resolved against the program's branch
+vector, so the interpreter does not use dynamically bound ADF variables. ADF
+bodies are lexically scoped: only their formal arguments are visible inside
+the body. ADI and ADL bodies also see the current iteration element and index,
+ADR bodies see the current recursion depth, and ADS bodies see the current
+storage value. The evaluator supports `AND`, `OR`, `IF`, and `PROGN` as
+special forms and calls other symbols as Common Lisp functions.
 
 The generalized kernel entry point is exported from `cl-koza-3`:
 
@@ -306,6 +323,31 @@ architecture-altering operations preserve ADIs while updating ADI calls and
 metadata as ADFs are added or removed, and `adi-creation`/`adi-deletion` can
 also change the number of ADI branches. A nested ADI call inside an ADI body
 reuses the enclosing ADI's iteration sequence through `*iteration-sequence*`.
+
+#### ADL, ADR, and ADS branches
+
+`run-aux-system` combines all auxiliary families. Its `problem-function`
+returns ten values: ADF specs, ADI specs, ADL specs, ADR specs, ADS specs,
+the RPB spec, the fitness-cases creator, the fitness function, the parameter
+definer, and the termination predicate. Any auxiliary list may be `NIL`.
+
+The one-family wrappers `run-adl-system`, `run-adr-system`, and
+`run-ads-system` keep the seven-value contract of `run-adi-system`, with the
+chosen auxiliary specs in the second position.
+
+All auxiliary branches use the same spec metadata protocol as ADIs:
+
+- **ADL**: `iteration-source` supplies an integer count or a sequence to
+  repeat. The body receives the current state, the iteration element, and the
+  zero-based index, then returns the next state.
+- **ADR**: `iteration-source` supplies the depth limit. The body receives the
+  current state and the current depth; recursive ADR calls inherit the limit
+  through `*recursion-limit*` and increment `*recursion-depth*`. The base case
+  returns the current state without evaluating the body.
+- **ADS**: `iteration-source` names the storage cell. The call arguments
+  initialize the cell on first use, and each body result is stored back.
+  `*storage-cells*` is the hash table holding the cells; bind it to a fresh
+  table for each independent evaluation.
 
 `run-genetic-programming-system` is the compatibility wrapper for the
 legacy two-ADF contract. Its `problem-function` returns ten values:
@@ -561,6 +603,38 @@ disappear during the run:
  :seed 1.0)
 ```
 
+### Example: ADL, ADR, and ADS
+
+The `auxiliary-branches` example combines all three remaining auxiliary
+families in one program. `ADL0` sums its index three times, `ADR0` increments
+a value until the depth limit, and `ADS0` increments a mutable cell. The
+result-producing branch adds their results:
+
+```lisp
+(make-adf-program
+ :adfs nil
+ :adis (list '(+ arg0 index)
+             '(if (< depth 2) (adr0 (+ arg0 1)) arg0)
+             '(+ value 1))
+ :rpb '(+ (adl0 0) (+ (adr0 0) (ads0 0)))
+ :branch-info ...)
+```
+
+Verify the known program and run a small evolutionary smoke test with:
+
+```lisp
+(asdf:load-system "cl-koza-3/examples/auxiliary-branches")
+
+(cl-koza-3.examples.auxiliary-branches:verify-known-program)
+
+(cl-koza-3.examples.auxiliary-branches:run-example
+ :maximum-generations 10
+ :size-of-population 100
+ :seed 1.0)
+```
+
+The known program reports zero standardized fitness and one hit.
+
 ### Architecture-altering operations
 
 The architecture-altering operations are exported from `cl-koza-3`.
@@ -695,18 +769,14 @@ The test suite uses FiveAM and is registered as `cl-koza-3/tests`:
 At the time of writing the suite reports:
 
 ```text
-Pass: 3340 (99%)
-Skip: 2 ( 0%)
+Pass: 3439 (100%)
+Skip: 0 ( 0%)
 Fail: 0 ( 0%)
 ```
 
-The two skipped tests document known issues:
-
-- `run-genetic-programming-system` accepts `maximum-generations` equal to
-  zero, but `report-on-run` later signals an error because
-  `*best-of-run-individual*` remains `NIL`.
-- `(random-integer 0)` returns `0` instead of signaling an error, even
-  though the documented range `0..N-1` is empty for `N = 0`.
+`maximum-generations` must now be a positive integer, and `random-integer`
+signals an error for non-positive sizes, so the previous known issues are
+covered by active tests.
 
 ### Roadmap
 
@@ -731,6 +801,8 @@ The two skipped tests document known issues:
   update ADI calls, and remap ADI/ADF metadata when ADF branches change.
 - **Phase 9 (done):** ADI creation/deletion, ADI-aware architecture-altering
   runs, nested ADI evaluation, and the `adi-architecture-altering` example.
+- **Phase 10 (done):** ADL/ADR/ADS branch representation, evaluation, run
+  entries, tests, and the `auxiliary-branches` example.
 
 ### Project layout
 

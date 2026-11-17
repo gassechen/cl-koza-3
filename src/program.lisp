@@ -114,35 +114,143 @@
       (error "No ADF with index ~S in PROGRAM." index))
     (setf (aref adfs index) new-body)))
 
+(defparameter *aux-branch-kinds* '(:adi :adl :adr :ads)
+  "Canonical order of automatically defined auxiliary branches.")
+
+(defun aux-branch-kind-p (kind)
+  (and (member kind *aux-branch-kinds*) t))
+
+(defun aux-branch-kind-prefix (kind)
+  (string (symbol-name kind)))
+
+(defun aux-branch-kind-order (kind)
+  (position kind *aux-branch-kinds*))
+
+(defun aux-branch-index (name)
+  (loop for kind in *aux-branch-kinds*
+        for prefix = (aux-branch-kind-prefix kind)
+        when (and (> (length name) (length prefix))
+                  (string= name prefix :end1 (length prefix))
+                  (every #'digit-char-p (subseq name (length prefix))))
+          do (return (cons kind (parse-integer name :start (length prefix))))))
+
+(defun adf-program-aux-count (program)
+  "Returns the number of auxiliary branch bodies in PROGRAM."
+  (length (adf-program-adis program)))
+
+(defun aux-kind-offset (program kind)
+  (let* ((infos (adf-program-branch-info program))
+         (adf-count (adf-program-branch-count program))
+         (order (or (aux-branch-kind-order kind) 0)))
+    (loop for index from adf-count below (max adf-count (1- (length infos)))
+          for other = (when (< index (length infos))
+                        (branch-info-kind (aref infos index)))
+          when (let ((other-order (and other
+                                       (aux-branch-kind-order other))))
+                 (and other-order (< other-order order)))
+            count 1)))
+
+(defun aux-kind-count (program kind)
+  (let* ((infos (adf-program-branch-info program))
+         (adf-count (adf-program-branch-count program))
+         (aux-info-count (max 0 (- (length infos) adf-count 1))))
+    (if (zerop aux-info-count)
+        (if (eq kind :adi)
+            (adf-program-aux-count program)
+            0)
+        (loop for index from adf-count below (+ adf-count aux-info-count)
+              count (eq (branch-info-kind (aref infos index)) kind)))))
+
+(defun adf-program-aux (program index)
+  "Returns auxiliary branch body INDEX from PROGRAM."
+  (let ((bodies (adf-program-adis program)))
+    (unless (and (integerp index)
+                 (<= 0 index)
+                 (< index (length bodies)))
+      (error "No auxiliary branch with index ~S in PROGRAM." index))
+    (aref bodies index)))
+
+(defun (setf adf-program-aux) (new-body program index)
+  (let ((bodies (adf-program-adis program)))
+    (unless (and (integerp index)
+                 (<= 0 index)
+                 (< index (length bodies)))
+      (error "No auxiliary branch with index ~S in PROGRAM." index))
+    (setf (aref bodies index) new-body)))
+
+(defun aux-insert-body (bodies program kind index body)
+  (let ((raw-index (+ (aux-kind-offset program kind) index)))
+    (concatenate 'vector
+                 (subseq bodies 0 raw-index)
+                 (vector body)
+                 (subseq bodies raw-index))))
+
+(defun aux-remove-body (bodies program kind index)
+  (let ((raw-index (+ (aux-kind-offset program kind) index)))
+    (concatenate 'vector
+                 (subseq bodies 0 raw-index)
+                 (subseq bodies (1+ raw-index)))))
+
+(defun adf-program-aux-body (program kind index)
+  (adf-program-aux program (+ (aux-kind-offset program kind) index)))
+
+(defun (setf adf-program-aux-body) (new-body program kind index)
+  (setf (adf-program-aux program (+ (aux-kind-offset program kind) index))
+        new-body))
+
 (defun adf-program-adi (program index)
   "Returns the body of ADI INDEX from PROGRAM."
-  (let ((adis (adf-program-adis program)))
-    (unless (and (integerp index)
-                 (<= 0 index)
-                 (< index (length adis)))
-      (error "No ADI with index ~S in PROGRAM." index))
-    (aref adis index)))
+  (adf-program-aux-body program :adi index))
 
 (defun (setf adf-program-adi) (new-body program index)
-  (let ((adis (adf-program-adis program)))
-    (unless (and (integerp index)
-                 (<= 0 index)
-                 (< index (length adis)))
-      (error "No ADI with index ~S in PROGRAM." index))
-    (setf (aref adis index) new-body)))
+  (setf (adf-program-aux-body program :adi index) new-body))
+
+(defun adf-program-adl (program index)
+  "Returns the body of ADL INDEX from PROGRAM."
+  (adf-program-aux-body program :adl index))
+
+(defun (setf adf-program-adl) (new-body program index)
+  (setf (adf-program-aux-body program :adl index) new-body))
+
+(defun adf-program-adr (program index)
+  "Returns the body of ADR INDEX from PROGRAM."
+  (adf-program-aux-body program :adr index))
+
+(defun (setf adf-program-adr) (new-body program index)
+  (setf (adf-program-aux-body program :adr index) new-body))
+
+(defun adf-program-ads (program index)
+  "Returns the body of ADS INDEX from PROGRAM."
+  (adf-program-aux-body program :ads index))
+
+(defun (setf adf-program-ads) (new-body program index)
+  (setf (adf-program-aux-body program :ads index) new-body))
 
 (defun adf-program-branch-count (program)
-  "Returns the number of ADFs in PROGRAM, not counting ADIs or the RPB."
+  "Returns the number of ADFs in PROGRAM, not counting auxiliary branches
+   or the RPB."
   (length (adf-program-adfs program)))
 
 (defun adf-program-adi-count (program)
   "Returns the number of ADIs in PROGRAM."
-  (length (adf-program-adis program)))
+  (aux-kind-count program :adi))
+
+(defun adf-program-adl-count (program)
+  "Returns the number of ADLs in PROGRAM."
+  (aux-kind-count program :adl))
+
+(defun adf-program-adr-count (program)
+  "Returns the number of ADRs in PROGRAM."
+  (aux-kind-count program :adr))
+
+(defun adf-program-ads-count (program)
+  "Returns the number of ADSs in PROGRAM."
+  (aux-kind-count program :ads))
 
 (defun adf-program-work-branch-count (program)
-  "Returns the number of non-RPB branches: ADFs plus ADIs."
+  "Returns the number of non-RPB branches: ADFs and auxiliary branches."
   (+ (adf-program-branch-count program)
-     (adf-program-adi-count program)))
+     (adf-program-aux-count program)))
 
 (defun adi-name-p (name)
   (and (> (length name) 3)
@@ -150,22 +258,23 @@
        (every #'digit-char-p (subseq name 3))))
 
 (defun branch-index (branch)
-  "Returns the ADF index for BRANCH, (:ADI . INDEX) for an ADI, or
-   :RPB for the result-producing branch."
+  "Returns the ADF index for BRANCH, (KIND . INDEX) for an auxiliary
+   branch, or :RPB for the result-producing branch."
   (etypecase branch
     (integer branch)
+    (cons branch)
     (symbol
      (cond
        ((eq branch :rpb) :rpb)
        (t
-        (let ((name (symbol-name branch)))
+        (let* ((name (symbol-name branch))
+               (aux-index (aux-branch-index name)))
           (cond
             ((and (> (length name) 3)
                   (string= name "ADF" :end1 3)
                   (every #'digit-char-p (subseq name 3)))
              (parse-integer name :start 3))
-            ((adi-name-p name)
-             (cons :adi (parse-integer name :start 3)))
+            (aux-index aux-index)
             (t
              (error "Unknown branch ~S." branch)))))))))
 
@@ -175,7 +284,9 @@
     (cond ((eq index :rpb)
            (adf-program-work-branch-count program))
           ((consp index)
-           (+ (adf-program-branch-count program) (cdr index)))
+           (+ (adf-program-branch-count program)
+              (aux-kind-offset program (car index))
+              (cdr index)))
           (t index))))
 
 (defun program-branch-info (program branch)
@@ -207,7 +318,8 @@
 (defun valid-branch-info-p (info)
   "Returns true when INFO has the minimum metadata needed by the kernel."
   (and (branch-info-p info)
-       (member (branch-info-kind info) '(:adf :adi :rpb))
+       (member (branch-info-kind info)
+               (list* :adf *aux-branch-kinds* '(:rpb)))
        (integerp (branch-info-arity info))
        (not (minusp (branch-info-arity info)))
        (listp (branch-info-formals info))
@@ -221,9 +333,9 @@
        (listp (branch-info-terminal-types info))
        (or (null (branch-info-allowed-branch-indices info))
            (listp (branch-info-allowed-branch-indices info)))
-       (or (not (eq (branch-info-kind info) :adi))
-           (and (or (null (branch-info-iteration-source info))
-                    (symbolp (branch-info-iteration-source info)))
+        (or (not (aux-branch-kind-p (branch-info-kind info)))
+            (and (or (null (branch-info-iteration-source info))
+                     (symbolp (branch-info-iteration-source info)))
                 (or (null (branch-info-iteration-variable info))
                     (symbolp (branch-info-iteration-variable info)))
                 (or (null (branch-info-iteration-index-variable info))
@@ -240,8 +352,13 @@
   (if program
       (append (loop for index below (adf-program-branch-count program)
                     collect (intern (format nil "ADF~D" index) :keyword))
-              (loop for index below (adf-program-adi-count program)
-                    collect (intern (format nil "ADI~D" index) :keyword))
+              (loop for kind in *aux-branch-kinds*
+                    append (loop for index below (aux-kind-count program kind)
+                                 collect (intern
+                                          (format nil "~A~D"
+                                                  (aux-branch-kind-prefix kind)
+                                                  index)
+                                          :keyword)))
               '(:rpb))
       *branch-names*))
 
@@ -251,7 +368,7 @@
     (cond ((eq index :rpb)
            (adf-program-rpb program))
           ((consp index)
-           (adf-program-adi program (cdr index)))
+           (adf-program-aux-body program (car index) (cdr index)))
           (t
            (adf-program-adf program index)))))
 
@@ -262,7 +379,8 @@
     (cond ((eq index :rpb)
            (setf (adf-program-rpb program) new-body))
           ((consp index)
-           (setf (adf-program-adi program (cdr index)) new-body))
+           (setf (adf-program-aux-body program (car index) (cdr index))
+                 new-body))
           (t
            (setf (adf-program-adf program index) new-body))))
   program)
@@ -290,9 +408,12 @@
        (%make-adf-program
         new-adfs new-adis new-branch-subtree branch-info))
       ((consp index)
-       (unless (< (cdr index) (length adis))
-         (error "No ADI with index ~S in PROGRAM." (cdr index)))
-       (setf (aref new-adis (cdr index)) new-branch-subtree)
+       (let ((raw-index (+ (aux-kind-offset program-to-copy (car index))
+                           (cdr index))))
+         (unless (< raw-index (length adis))
+           (error "No ~A with index ~S in PROGRAM."
+                  (aux-branch-kind-prefix (car index)) (cdr index)))
+         (setf (aref new-adis raw-index) new-branch-subtree))
        (%make-adf-program
         new-adfs new-adis
         (copy-tree (adf-program-rpb program-to-copy))
@@ -320,11 +441,20 @@
                      (mapcar #'symbol-name (branch-formals program branch))
                      body))
     (loop for index below (length adis)
-          for branch = (intern (format nil "ADI~D" index) :keyword)
+          for info = (let* ((infos (adf-program-branch-info program))
+                            (info-index
+                              (+ (adf-program-branch-count program) index)))
+                       (when (< info-index (length infos))
+                         (aref infos info-index)))
+          for kind = (or (and info (branch-info-kind info)) :adi)
+          for prefix = (aux-branch-kind-prefix kind)
+          for family-index = (- index (aux-kind-offset program kind))
+          for branch = (intern (format nil "~A~D" prefix family-index)
+                               :keyword)
           for body = (aref adis index)
           do (format stream
-                     "~&(defun ADI~D (~{~A~^ ~})~%  (values ~S))~%"
-                     index
+                     "~&(defun ~A~D (~{~A~^ ~})~%  (values ~S))~%"
+                     prefix family-index
                      (mapcar #'symbol-name (branch-formals program branch))
                      body))
     (format stream

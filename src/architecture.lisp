@@ -65,19 +65,27 @@
 (defun adf-symbol (index &optional (package :keyword))
   (intern (format nil "ADF~D" index) (or package :keyword)))
 
-(defun adi-symbol-p (symbol)
+(defun aux-symbol-index (symbol)
   (and (symbolp symbol)
-       (let ((name (symbol-name symbol)))
-         (and (> (length name) 3)
-              (string= name "ADI" :end1 3)
-              (every #'digit-char-p (subseq name 3))))))
+       (cl-koza-3.program::aux-branch-index (symbol-name symbol))))
+
+(defun aux-symbol (kind index &optional (package :keyword))
+  (intern (format nil "~A~D"
+                  (cl-koza-3.program::aux-branch-kind-prefix kind)
+                  index)
+          (or package :keyword)))
+
+(defun adi-symbol-p (symbol)
+  (let ((index (aux-symbol-index symbol)))
+    (and index (eq (car index) :adi))))
 
 (defun adi-symbol-index (symbol)
-  (when (adi-symbol-p symbol)
-    (parse-integer (symbol-name symbol) :start 3)))
+  (let ((index (aux-symbol-index symbol)))
+    (when (and index (eq (car index) :adi))
+      (cdr index))))
 
 (defun adi-symbol (index &optional (package :keyword))
-  (intern (format nil "ADI~D" index) (or package :keyword)))
+  (aux-symbol :adi index package))
 
 (defun argument-symbol (index &optional (package :keyword))
   (intern (format nil "ARG~D" index) (or package :keyword)))
@@ -123,20 +131,19 @@
 
 (defun branch-call-index (function)
   (or (adf-symbol-index function)
-      (adi-symbol-index function)))
+      (aux-symbol-index function)))
 
 (defun branch-call-target-info (function program)
-  (let ((adf-index (adf-symbol-index function)))
+  (let ((adf-index (adf-symbol-index function))
+        (aux-index (aux-symbol-index function)))
     (cond
       (adf-index
        (and program
             (< adf-index (adf-program-branch-count program))
             (program-branch-info program adf-index)))
-      ((adi-symbol-index function)
+      (aux-index
        (and program
-            (program-branch-info
-             program
-             (adi-symbol (adi-symbol-index function)))))
+            (program-branch-info program aux-index)))
       (t nil))))
 
 (defun branch-call-allowed-p (info function program)
@@ -306,12 +313,12 @@
 
 (defun branch-body-at (program index)
   (let ((adf-count (adf-program-branch-count program))
-        (adi-count (adf-program-adi-count program)))
+        (work-count (adf-program-work-branch-count program)))
     (cond ((< index adf-count)
            (adf-program-adf program index))
-          ((< index (+ adf-count adi-count))
-           (adf-program-adi program (- index adf-count)))
-          ((= index (+ adf-count adi-count))
+          ((< index work-count)
+           (adf-program-aux program (- index adf-count)))
+          ((= index work-count)
            (adf-program-rpb program))
           (t
            (error "PROGRAM has no branch at index ~D." index)))))
@@ -329,30 +336,44 @@
                  (vector info)
                  (subseq infos adf-info-count))))
 
-(defun insert-adi-info (infos info)
-  (let* ((adi-info-count
+(defun insert-aux-info (infos info)
+  (let* ((kind (branch-info-kind info))
+         (order (or (cl-koza-3.program::aux-branch-kind-order kind) 0))
+         (adf-info-count
            (count-if (lambda (branch-info)
-                       (eq (branch-info-kind branch-info) :adi))
+                       (eq (branch-info-kind branch-info) :adf))
                      infos))
-         (adi-end (+ (count-if (lambda (branch-info)
-                                 (eq (branch-info-kind branch-info)
-                                     :adf))
-                               infos)
-                     adi-info-count)))
+         (insertion-index
+           (+ adf-info-count
+              (loop for branch-info across infos
+                    for other-kind = (branch-info-kind branch-info)
+                    for other-order =
+                      (and other-kind
+                           (cl-koza-3.program::aux-branch-kind-order
+                            other-kind))
+                    when (and other-order (< other-order order))
+                      count 1))))
     (concatenate 'vector
-                 (subseq infos 0 adi-end)
+                 (subseq infos 0 insertion-index)
                  (vector info)
-                 (subseq infos adi-end))))
+                 (subseq infos insertion-index))))
+
+(defun insert-adi-info (infos info)
+  (insert-aux-info infos info))
 
 (defun normalize-branch-index (program branch)
   (let ((index (branch-index branch)))
     (cond ((eq index :rpb)
            (adf-program-work-branch-count program))
           ((consp index)
-           (let ((adi-index (cdr index)))
-             (unless (< adi-index (adf-program-adi-count program))
+           (let ((kind (car index))
+                 (family-index (cdr index)))
+             (unless (< family-index
+                        (cl-koza-3.program::aux-kind-count program kind))
                (error "PROGRAM has no branch named ~S." branch))
-             (+ (adf-program-branch-count program) adi-index)))
+             (+ (adf-program-branch-count program)
+                (cl-koza-3.program::aux-kind-offset program kind)
+                family-index)))
           ((and (integerp index)
                 (<= 0 index)
                 (< index (adf-program-branch-count program)))
@@ -366,7 +387,7 @@
     (cond ((< index adf-count)
            (setf (adf-program-adf program index) new-body))
           ((< index work-count)
-           (setf (adf-program-adi program (- index adf-count)) new-body))
+           (setf (adf-program-aux program (- index adf-count)) new-body))
           ((= index work-count)
            (setf (adf-program-rpb program) new-body))
           (t
@@ -1105,7 +1126,8 @@
                new-adfs
                new-rpb
                (insert-adi-info new-infos new-info)
-               (concatenate 'vector new-adis (vector new-body))))))))))
+                (cl-koza-3.program::aux-insert-body
+                 new-adis program :adi new-index new-body)))))))))
 
 (defun set-point (body point new-value)
   (let ((wrapper (list (copy-tree body))))
@@ -1314,7 +1336,7 @@
            (or (operation-adf-branch-index program branch)
                (return-from branch-deletion nil)))
          (adf-count (adf-program-branch-count program))
-         (adi-count (adf-program-adi-count program))
+         (aux-count (adf-program-aux-count program))
          (infos (adf-program-branch-info program))
          (new-infos (remove-adf-info infos deleted-index))
          (generation-program
@@ -1322,8 +1344,8 @@
             (make-array (1- adf-count) :initial-element nil)
             nil
             new-infos
-            (make-array adi-count :initial-element nil))))
-    (loop for old-index below (+ adf-count adi-count)
+            (make-array aux-count :initial-element nil))))
+    (loop for old-index below (+ adf-count aux-count)
           unless (= old-index deleted-index)
             do (let ((new-index (if (< old-index deleted-index)
                                     old-index
@@ -1342,7 +1364,7 @@
                      generation-program)))
       (return-from branch-deletion nil))
     (let ((new-adfs nil)
-          (new-adis (make-array adi-count)))
+          (new-adis (make-array aux-count)))
       (loop for old-index below adf-count
             unless (= old-index deleted-index)
               do (let ((new-index (if (< old-index deleted-index)
@@ -1357,12 +1379,11 @@
                              (branch-info-result-type new-info)
                              generation-program)
                             new-adfs))))
-      (loop for adi-index below adi-count
-            for new-info = (aref new-infos
-                                  (+ (1- adf-count) adi-index))
-            do (setf (aref new-adis adi-index)
+      (loop for aux-index below aux-count
+            for new-info = (aref new-infos (+ adf-count aux-index -1))
+            do (setf (aref new-adis aux-index)
                      (delete-adf-calls-in-tree
-                      (adf-program-adi program adi-index)
+                      (branch-body-at program (+ adf-count aux-index))
                       deleted-index
                       new-info
                       program
@@ -1503,15 +1524,16 @@
            (or (operation-adi-branch-index program branch)
                (return-from adi-deletion nil)))
          (adf-count (adf-program-branch-count program))
-         (adi-count (adf-program-adi-count program))
-         (infos (adf-program-branch-info program))
-         (new-infos (remove-adi-info infos deleted-index))
-         (generation-program
-           (make-operation-program
-            (make-array adf-count :initial-element nil)
-            nil
-            new-infos
-            (make-array (1- adi-count) :initial-element nil))))
+          (adi-count (adf-program-adi-count program))
+          (infos (adf-program-branch-info program))
+          (new-infos (remove-adi-info infos deleted-index))
+          (generation-program
+            (make-operation-program
+             (make-array adf-count :initial-element nil)
+             nil
+             new-infos
+             (make-array (1- (adf-program-aux-count program))
+                         :initial-element nil))))
     (labels ((new-adi-index (old-index)
                (if (< old-index deleted-index)
                    old-index
@@ -1543,7 +1565,9 @@
                          rpb-info generation-program)))
           (return-from adi-deletion nil)))
       (let ((new-adfs (make-array adf-count))
-            (new-adis (make-array (1- adi-count))))
+            (new-adis
+              (cl-koza-3.program::aux-remove-body
+               (adf-program-adis program) program :adi deleted-index)))
         (loop for adf-index below adf-count
               for info = (aref new-infos adf-index)
               do (setf (aref new-adfs adf-index)
@@ -1674,8 +1698,8 @@
                               :initial-element nil)
                   nil
                   new-infos
-                  (make-array (adf-program-adi-count program)
-                              :initial-element nil)))
+                   (make-array (adf-program-aux-count program)
+                               :initial-element nil)))
                (new-adfs (map 'vector #'copy-tree
                               (adf-program-adfs program)))
                (new-adis (map 'vector #'copy-tree

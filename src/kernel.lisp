@@ -80,7 +80,8 @@
   (result-type :boolean)
   iteration-source
   iteration-variable
-  iteration-index-variable)
+  iteration-index-variable
+  (kind :adf))
 
 (defstruct resolved-branch
   function-set
@@ -94,7 +95,8 @@
   formals
   iteration-source
   iteration-variable
-  iteration-index-variable)
+  iteration-index-variable
+  (kind :adf))
 
 (defun funcallable-designator-p (object)
   (or (functionp object)
@@ -105,10 +107,10 @@
                                maximum-generations
                                size-of-population)
   (assert (and (integerp maximum-generations)
-               (not (minusp maximum-generations)))
-          (maximum-generations)
-          "Maximum-generations must be a non-negative integer, not ~S"
-          maximum-generations)
+               (plusp maximum-generations))
+           (maximum-generations)
+           "Maximum-generations must be a positive integer, not ~S"
+           maximum-generations)
   (assert (and (integerp size-of-population)
                (plusp size-of-population))
           (size-of-population)
@@ -225,7 +227,13 @@
     (error "~A terminal-set creator must be a function designator."
            description))
   (let ((arity (branch-spec-arity spec))
-        (result-type (branch-spec-result-type spec)))
+        (result-type (branch-spec-result-type spec))
+        (kind (branch-spec-kind spec)))
+    (unless (or (eq kind :adf)
+                (eq kind :rpb)
+                (cl-koza-3.program::aux-branch-kind-p kind))
+      (error "~A kind must be :ADF, :RPB or an auxiliary kind, not ~S."
+             description kind))
     (unless (or (null arity)
                 (and (integerp arity)
                      (not (minusp arity))))
@@ -242,18 +250,28 @@
                description entry))))
   spec)
 
-(defun validate-branch-specs (adf-specs rpb-spec &optional adi-specs)
-  (unless (listp adf-specs)
-    (error "ADF specs must be a list, not ~S." adf-specs))
-  (unless (listp adi-specs)
-    (error "ADI specs must be a list, not ~S." adi-specs))
-  (loop for spec in adf-specs
-        for index from 0
-        do (validate-branch-spec spec (format nil "ADF~D" index)))
-  (loop for spec in adi-specs
-        for index from 0
-        do (validate-branch-spec spec (format nil "ADI~D" index)))
-  (validate-branch-spec rpb-spec "RPB"))
+(defun validate-branch-specs (adf-specs rpb-spec &optional adi-specs
+                                                 &rest options)
+  (let ((adl-specs (getf options :adl-specs))
+        (adr-specs (getf options :adr-specs))
+        (ads-specs (getf options :ads-specs)))
+    (unless (listp adf-specs)
+      (error "ADF specs must be a list, not ~S." adf-specs))
+    (loop for (description specs) in
+            (list (list "ADI" adi-specs)
+                  (list "ADL" adl-specs)
+                  (list "ADR" adr-specs)
+                  (list "ADS" ads-specs))
+          do (unless (listp specs)
+               (error "~A specs must be a list, not ~S." description specs))
+             (loop for spec in specs
+                   for index from 0
+                   do (validate-branch-spec
+                       spec (format nil "~A~D" description index))))
+    (loop for spec in adf-specs
+          for index from 0
+          do (validate-branch-spec spec (format nil "ADF~D" index)))
+    (validate-branch-spec rpb-spec "RPB")))
 
 (defun run-genetic-programming-system (problem-function
                                        seed
@@ -402,6 +420,96 @@
                 termination-predicate
                 :adi-specs adi-specs)))
 
+(defun run-aux-system (problem-function
+                       seed
+                       maximum-generations
+                       size-of-population
+                       &rest seeded-programs)
+  "Runs genetic programming with ADFs and all auxiliary branch families.
+
+   PROBLEM-FUNCTION must return ten values: ADF specs, ADI specs, ADL
+   specs, ADR specs, ADS specs, the RPB spec, the fitness-cases creator,
+   the fitness function, the parameter definer, and the termination
+   predicate.  Each auxiliary family may be an empty list."
+  (validate-run-arguments problem-function
+                          seed
+                          maximum-generations
+                          size-of-population)
+  (initialize-run seed)
+  (multiple-value-bind (adf-specs adi-specs adl-specs adr-specs ads-specs
+                        rpb-spec fitness-cases-creator fitness-function
+                        parameter-definer termination-predicate)
+      (funcall problem-function)
+    (validate-branch-specs adf-specs rpb-spec adi-specs
+                           :adl-specs adl-specs
+                           :adr-specs adr-specs
+                           :ads-specs ads-specs)
+    (run-system adf-specs rpb-spec maximum-generations size-of-population
+                seeded-programs
+                fitness-cases-creator fitness-function parameter-definer
+                termination-predicate
+                :adi-specs adi-specs
+                :adl-specs adl-specs
+                :adr-specs adr-specs
+                :ads-specs ads-specs)))
+
+(defun run-adl-system (problem-function
+                       seed
+                       maximum-generations
+                       size-of-population
+                       &rest seeded-programs)
+  "Runs genetic programming with automatically defined loops.  The
+   problem function has the same seven-value contract as RUN-ADI-SYSTEM,
+   with ADL specs in the second position."
+  (apply #'run-aux-system
+         (lambda ()
+           (multiple-value-bind (adf-specs adl-specs rpb-spec
+                                 fitness-cases-creator fitness-function
+                                 parameter-definer termination-predicate)
+               (funcall problem-function)
+             (values adf-specs nil adl-specs nil nil rpb-spec
+                     fitness-cases-creator fitness-function
+                     parameter-definer termination-predicate)))
+         seed maximum-generations size-of-population seeded-programs))
+
+(defun run-adr-system (problem-function
+                       seed
+                       maximum-generations
+                       size-of-population
+                       &rest seeded-programs)
+  "Runs genetic programming with automatically defined recursion.  The
+   problem function has the same seven-value contract as RUN-ADI-SYSTEM,
+   with ADR specs in the second position."
+  (apply #'run-aux-system
+         (lambda ()
+           (multiple-value-bind (adf-specs adr-specs rpb-spec
+                                 fitness-cases-creator fitness-function
+                                 parameter-definer termination-predicate)
+               (funcall problem-function)
+             (values adf-specs nil nil adr-specs nil rpb-spec
+                     fitness-cases-creator fitness-function
+                     parameter-definer termination-predicate)))
+         seed maximum-generations size-of-population seeded-programs))
+
+(defun run-ads-system (problem-function
+                       seed
+                       maximum-generations
+                       size-of-population
+                       &rest seeded-programs)
+  "Runs genetic programming with automatically defined storage.  The
+   problem function has the same seven-value contract as RUN-ADI-SYSTEM,
+   with ADS specs in the second position."
+  (apply #'run-aux-system
+         (lambda ()
+           (multiple-value-bind (adf-specs ads-specs rpb-spec
+                                 fitness-cases-creator fitness-function
+                                 parameter-definer termination-predicate)
+               (funcall problem-function)
+             (values adf-specs nil nil nil ads-specs rpb-spec
+                     fitness-cases-creator fitness-function
+                     parameter-definer termination-predicate)))
+         seed maximum-generations size-of-population seeded-programs))
+
 (defun resolve-branch-spec (spec default-arity)
   (multiple-value-bind (function-set argument-map function-types)
       (funcall (branch-spec-function-set-creator spec))
@@ -419,16 +527,30 @@
        :iteration-source (branch-spec-iteration-source spec)
        :iteration-variable (branch-spec-iteration-variable spec)
        :iteration-index-variable
-       (branch-spec-iteration-index-variable spec)))))
+       (branch-spec-iteration-index-variable spec)
+       :kind (branch-spec-kind spec)))))
 
-(defun resolve-branch-specs (adf-specs rpb-spec &optional adi-specs)
-  (values (loop for spec in adf-specs
-                collect (resolve-branch-spec spec 3))
-          (resolve-branch-spec rpb-spec 0)
-          (loop for spec in adi-specs
-                collect (resolve-branch-spec spec 1))))
+(defun resolve-aux-specs (specs kind &optional (default-arity 1))
+  (loop for spec in specs
+        collect (let ((copy (copy-branch-spec spec)))
+                  (setf (branch-spec-kind copy) kind)
+                  (resolve-branch-spec copy default-arity))))
 
-(defun resolve-terminal-sets (adf-branches rpb-branch &optional adi-branches)
+(defun resolve-branch-specs (adf-specs rpb-spec &optional adi-specs
+                                                 &rest options)
+  (let ((adl-specs (getf options :adl-specs))
+        (adr-specs (getf options :adr-specs))
+        (ads-specs (getf options :ads-specs)))
+    (values (loop for spec in adf-specs
+                  collect (resolve-branch-spec spec 3))
+            (resolve-branch-spec rpb-spec 0)
+            (resolve-aux-specs adi-specs :adi)
+            (resolve-aux-specs adl-specs :adl)
+            (resolve-aux-specs adr-specs :adr)
+            (resolve-aux-specs ads-specs :ads))))
+
+(defun resolve-terminal-sets (adf-branches rpb-branch &optional adi-branches
+                                                      &rest other-aux-branches)
   (labels ((resolve (branch)
              (multiple-value-bind (terminal-set terminal-types)
                  (funcall (resolved-branch-terminal-set-creator branch))
@@ -438,6 +560,9 @@
       (resolve branch))
     (dolist (branch adi-branches)
       (resolve branch))
+    (dolist (branches other-aux-branches)
+      (dolist (branch branches)
+        (resolve branch)))
     (resolve rpb-branch))
   (values adf-branches rpb-branch adi-branches))
 
@@ -459,11 +584,21 @@
    :iteration-index-variable
    (resolved-branch-iteration-index-variable resolved)))
 
-(defun resolve-branch-infos (adf-branches rpb-branch &optional adi-branches)
-  "Builds a vector of BRANCH-INFO objects in ADF, ADI, RPB order."
-  (let* ((adf-count (length adf-branches))
-         (adi-count (length adi-branches))
-         (infos (make-array (+ 1 adf-count adi-count))))
+(defun resolve-branch-infos (adf-branches rpb-branch &optional adi-branches
+                                                      &rest options)
+  "Builds a vector of BRANCH-INFO objects in ADF, ADI, ADL, ADR, ADS, RPB
+   order."
+  (let ((adl-branches (getf options :adl-branches))
+        (adr-branches (getf options :adr-branches))
+        (ads-branches (getf options :ads-branches)))
+    (let* ((adf-count (length adf-branches))
+         (aux-groups (list (list :adi adi-branches)
+                           (list :adl adl-branches)
+                           (list :adr adr-branches)
+                           (list :ads ads-branches)))
+         (aux-count (loop for (nil branches) in aux-groups
+                          sum (length branches)))
+         (infos (make-array (+ 1 adf-count aux-count))))
     (loop for branch in adf-branches
           for index from 0
           do (setf (aref infos index)
@@ -472,21 +607,28 @@
                     (intern (format nil "ADF~D" index) :keyword)
                     :adf
                     (loop for previous below index collect previous))))
-    (loop for branch in adi-branches
-          for index from adf-count
-          do (setf (aref infos index)
-                   (make-branch-info-for-resolved
-                    branch
-                    (intern (format nil "ADI~D" (- index adf-count))
-                            :keyword)
-                    :adi
-                    (loop for adf-index below adf-count
-                          collect adf-index))))
-    (setf (aref infos (+ adf-count adi-count))
+    (let ((index adf-count))
+      (loop for (kind branches) in aux-groups
+            do (loop for family-index from 0
+                     for branch in branches
+                     do (setf (aref infos index)
+                              (make-branch-info-for-resolved
+                               branch
+                               (intern
+                                (format nil "~A~D"
+                                        (cl-koza-3.program::aux-branch-kind-prefix
+                                         kind)
+                                        family-index)
+                                :keyword)
+                               kind
+                               (loop for adf-index below adf-count
+                                     collect adf-index)))
+                        (incf index))))
+    (setf (aref infos (+ adf-count aux-count))
           (make-branch-info-for-resolved
            rpb-branch :rpb :rpb
-           (loop for index below adf-count collect index)))
-    infos))
+            (loop for index below adf-count collect index)))
+    infos)))
 
 (defun run-system (adf-specs
                    rpb-spec
@@ -496,18 +638,25 @@
                    fitness-cases-creator
                    fitness-function
                    parameter-definer
-                   termination-predicate
-                   &key adi-specs
-                     (breeding-function #'breed-new-population))
-  (multiple-value-bind (adf-branches rpb-branch adi-branches)
-      (resolve-branch-specs adf-specs rpb-spec adi-specs)
+                    termination-predicate
+                    &key adi-specs adl-specs adr-specs ads-specs
+                      (breeding-function #'breed-new-population))
+  (multiple-value-bind (adf-branches rpb-branch adi-branches
+                        adl-branches adr-branches ads-branches)
+      (resolve-branch-specs adf-specs rpb-spec adi-specs
+                            :adl-specs adl-specs
+                            :adr-specs adr-specs
+                            :ads-specs ads-specs)
     (funcall parameter-definer)
     (validate-deme-parameters size-of-population)
-    (describe-parameters-for-run maximum-generations
-                                 size-of-population
-                                 (length adf-branches)
-                                 (length adi-branches))
-    (resolve-terminal-sets adf-branches rpb-branch adi-branches)
+    (describe-parameters-for-run
+     maximum-generations size-of-population
+     (length adf-branches) (length adi-branches)
+     :number-of-adls (length adl-branches)
+     :number-of-adrs (length adr-branches)
+     :number-of-adss (length ads-branches))
+    (resolve-terminal-sets adf-branches rpb-branch adi-branches
+                           adl-branches adr-branches ads-branches)
     (let ((fitness-cases (funcall fitness-cases-creator)))
       (if (= *number-of-demes* 1)
           (let ((population
@@ -515,7 +664,10 @@
                                                    adf-branches
                                                    rpb-branch
                                                    seeded-programs
-                                                   :adi-branches adi-branches))
+                                                    :adi-branches adi-branches
+                                                    :adl-branches adl-branches
+                                                    :adr-branches adr-branches
+                                                    :ads-branches ads-branches))
                 (new-programs (make-array size-of-population)))
             (execute-generations population
                                  new-programs
@@ -535,7 +687,10 @@
                                                  adf-branches
                                                  rpb-branch
                                                  seeded-programs
-                                                 :adi-branches adi-branches))
+                                                  :adi-branches adi-branches
+                                                  :adl-branches adl-branches
+                                                  :adr-branches adr-branches
+                                                  :ads-branches ads-branches))
                  (new-programs (make-array deme-size)))
             (execute-island-generations demes
                                         new-programs
@@ -592,8 +747,12 @@
 
 (defun describe-parameters-for-run (maximum-generations
                                     size-of-population
-                                    &optional number-of-adfs number-of-adis)
+                                    &optional number-of-adfs number-of-adis
+                                      &rest options)
   "Lists the parameter settings for this run."
+  (let ((number-of-adls (getf options :number-of-adls))
+        (number-of-adrs (getf options :number-of-adrs))
+        (number-of-adss (getf options :number-of-adss)))
   (format t "~2%Parameters used for this run.~
               ~%=============================")
   (format t "~%Maximum number of Generations:~50T~D"
@@ -603,6 +762,12 @@
     (format t "~%Number of ADFs:~50T~D" number-of-adfs))
   (when (and number-of-adis (plusp number-of-adis))
     (format t "~%Number of ADIs:~50T~D" number-of-adis))
+  (when (and number-of-adls (plusp number-of-adls))
+    (format t "~%Number of ADLs:~50T~D" number-of-adls))
+  (when (and number-of-adrs (plusp number-of-adrs))
+    (format t "~%Number of ADRs:~50T~D" number-of-adrs))
+  (when (and number-of-adss (plusp number-of-adss))
+    (format t "~%Number of ADSs:~50T~D" number-of-adss))
   (when (> *number-of-demes* 1)
     (format t "~%Number of demes:~50T~D" *number-of-demes*)
     (format t "~%Size of each deme:~50T~D"
@@ -637,7 +802,7 @@
   (format t "~%Selection method: ~50T~A" *method-of-selection*)
   (format t "~%Tournament group size: ~50T~D" *tournament-size*)
   (format t "~%Generation method: ~50T~A" *method-of-generation*)
-  (format t "~%Randomizer seed: ~50T~D~%" *seed*))
+  (format t "~%Randomizer seed: ~50T~D~%" *seed*)))
 
 (defvar *generation-0-uniquifier-table*
   (make-hash-table :test #'equal)
@@ -729,14 +894,17 @@
                            adf-branches
                            rpb-branch
                            branch-infos
-                           &key adi-branches)
-  "Creates a new individual with an arbitrary number of ADFs and ADIs."
-  (let ((type-program
-          (make-adf-program
-           :adfs (make-array (length adf-branches) :initial-element nil)
-           :adis (make-array (length adi-branches) :initial-element nil)
-           :rpb nil
-           :branch-info branch-infos)))
+                           &key adi-branches adl-branches adr-branches
+                             ads-branches)
+  "Creates a new individual with arbitrary ADF and auxiliary branches."
+  (let* ((aux-branches (append adi-branches adl-branches
+                               adr-branches ads-branches))
+         (type-program
+           (make-adf-program
+            :adfs (make-array (length adf-branches) :initial-element nil)
+            :adis (make-array (length aux-branches) :initial-element nil)
+            :rpb nil
+            :branch-info branch-infos)))
     (labels ((branch-parameters ()
                (branch-generation-parameters
                 individual-index
@@ -767,13 +935,13 @@
                    for index from 0
                    collect (create-branch branch index) into bodies
                    finally (return (coerce bodies 'vector)))
-       :adis (loop for branch in adi-branches
+       :adis (loop for branch in aux-branches
                    for index from (length adf-branches)
                    collect (create-branch branch index) into bodies
                    finally (return (coerce bodies 'vector)))
        :rpb (create-branch rpb-branch
                            (+ (length adf-branches)
-                              (length adi-branches)))
+                              (length aux-branches)))
        :branch-info branch-infos))))
 
 (defun program-uniquifier-key (program)
@@ -784,9 +952,10 @@
 (defun create-population-with-branches (size-of-population
                                         adf-branches
                                         rpb-branch
-                                        seeded-programs
-                                        &key adi-branches)
-  "Creates the population with an arbitrary number of ADF and ADI branches.
+                                         seeded-programs
+                                         &key adi-branches adl-branches
+                                           adr-branches ads-branches)
+  "Creates the population with arbitrary ADF and auxiliary branches.
 
    Random programs are generated from deterministic per-individual
    seeds, so the initial population is reproducible regardless of the
@@ -801,8 +970,11 @@
          (base-seed *seed*)
          (generation-maximum-depth *max-depth-for-new-individuals*)
          (generation-method *method-of-generation*)
-         (branch-infos
-           (resolve-branch-infos adf-branches rpb-branch adi-branches)))
+          (branch-infos
+            (resolve-branch-infos adf-branches rpb-branch adi-branches
+                                  :adl-branches adl-branches
+                                  :adr-branches adr-branches
+                                  :ads-branches ads-branches)))
     (dotimes (individual-index seeded-count)
       (let ((program (nth individual-index seeded-programs)))
         (setf (adf-program-branch-info program)
@@ -830,7 +1002,10 @@
                         adf-branches
                         rpb-branch
                         branch-infos
-                        :adi-branches adi-branches))
+                                      :adi-branches adi-branches
+                                      :adl-branches adl-branches
+                                      :adr-branches adr-branches
+                                      :ads-branches ads-branches))
                  (setf (aref states individual-index) *seed*))))
       (let ((random-count (- size-of-population seeded-count)))
         (cond ((zerop random-count))
@@ -874,7 +1049,10 @@
                                      adf-branches
                                      rpb-branch
                                      branch-infos
-                                     :adi-branches adi-branches))
+                                     :adi-branches adi-branches
+                         :adl-branches adl-branches
+                         :adr-branches adr-branches
+                         :ads-branches ads-branches))
                               (setf state *seed*)))
                            (t
                             (incf attempts-at-this-individual)
@@ -888,7 +1066,10 @@
                                      adf-branches
                                      rpb-branch
                                      branch-infos
-                                     :adi-branches adi-branches))
+                                     :adi-branches adi-branches
+                         :adl-branches adl-branches
+                         :adr-branches adr-branches
+                         :ads-branches ads-branches))
                               (setf state *seed*))))))
                  (setf (aref candidates individual-index) new-program
                        (aref states individual-index) state
@@ -901,8 +1082,9 @@
                                 deme-size
                                 adf-branches
                                 rpb-branch
-                                seeded-programs
-                                &key adi-branches)
+                                 seeded-programs
+                                 &key adi-branches adl-branches
+                                   adr-branches ads-branches)
   "Creates NUMBER-OF-DEMES populations of DEME-SIZE individuals.
    SEEDED-PROGRAMS are placed in the first deme only."
   (let ((demes (make-array number-of-demes)))
@@ -913,7 +1095,10 @@
              adf-branches
              rpb-branch
              (if (zerop deme-index) seeded-programs nil)
-             :adi-branches adi-branches)))
+             :adi-branches adi-branches
+             :adl-branches adl-branches
+             :adr-branches adr-branches
+             :ads-branches ads-branches)))
     demes))
 
 (defun flatten-demes (demes)

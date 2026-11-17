@@ -4,9 +4,18 @@
                 evaluate-adf-tree))
 
 (defvar *iteration-sequence* :unbound
-  "Fallback sequence iterated over by ADI calls.  A branch's
+  "Fallback sequence iterated over by ADI and ADL calls.  A branch's
    ITERATION-SOURCE metadata takes precedence when that symbol is bound
    in the caller's environment.")
+
+(defvar *recursion-depth* 0
+  "Current depth used by ADR calls.")
+
+(defvar *recursion-limit* nil
+  "Depth limit bound by the outermost ADR call.")
+
+(defvar *storage-cells* nil
+  "Hash table of mutable storage cells used by ADS calls.")
 
 (defun binding-key-name (key)
   (etypecase key
@@ -35,17 +44,28 @@
             (values index t))))
       (values nil nil)))
 
-(defun adi-call-index (operator program)
+(defun aux-call-index (operator program)
   (if (symbolp operator)
-      (let ((name (symbol-name operator)))
-        (when (and (> (length name) 3)
-                   (string-equal "ADI" name :end1 3 :end2 3)
-                   (every #'digit-char-p (subseq name 3)))
-          (let ((index (parse-integer name :start 3)))
-            (unless (< index (adf-program-adi-count program))
-              (error "Program has no ADI~D." index))
-            (values index t))))
-      (values nil nil)))
+      (let* ((name (symbol-name operator))
+             (aux-index
+               (cl-koza-3.program::aux-branch-index name)))
+        (when aux-index
+          (let ((kind (car aux-index))
+                (index (cdr aux-index)))
+            (unless (< index (cl-koza-3.program::aux-kind-count
+                              program kind))
+              (error "Program has no ~A~D."
+                     (cl-koza-3.program::aux-branch-kind-prefix kind)
+                     index))
+            (values kind index t))))
+      (values nil nil nil)))
+
+(defun adi-call-index (operator program)
+  (multiple-value-bind (kind index call-p)
+      (aux-call-index operator program)
+    (if (and call-p (eq kind :adi))
+        (values index t)
+        (values nil nil))))
 
 (defun adi-symbol (index &optional (package :keyword))
   (intern (format nil "ADI~D" index) (or package :keyword)))
@@ -70,22 +90,22 @@
 (defun adi-iteration-index-variable (info)
   (or (branch-info-iteration-index-variable info) :index))
 
-(defun adi-state-values (info state)
+(defun branch-state-values (info state)
   (let ((arity (branch-info-arity info)))
     (cond ((zerop arity) nil)
           ((= arity 1) (list state))
           (t (coerce state 'list)))))
 
-(defun initial-adi-state (info argument-values)
+(defun initial-branch-state (info argument-values)
   (let ((arity (branch-info-arity info)))
     (unless (= (length argument-values) arity)
-      (error "ADI branch ~S expects ~D argument~:P, got ~D."
+      (error "Branch ~S expects ~D argument~:P, got ~D."
              (branch-info-name info) arity (length argument-values)))
     (cond ((zerop arity) nil)
           ((= arity 1) (first argument-values))
           (t (copy-list argument-values)))))
 
-(defun next-adi-state (info values)
+(defun next-branch-state (info values)
   (let ((arity (branch-info-arity info)))
     (cond ((zerop arity) nil)
           ((= arity 1) (first values))
@@ -96,41 +116,174 @@
           ((= (length values) arity)
            (copy-list values))
           (t
-           (error "ADI branch ~S must produce ~D state values, got ~S."
+           (error "Branch ~S must produce ~D state values, got ~S."
                   (branch-info-name info) arity values)))))
 
-(defun adi-iteration-environment (info state item index)
+(defun aux-iteration-environment (info state item index)
   (append
    (loop for formal in (branch-info-formals info)
-         for value in (adi-state-values info state)
+         for value in (branch-state-values info state)
          collect (cons formal value))
    (list (cons (adi-iteration-variable info) item)
          (cons (adi-iteration-index-variable info) index))))
 
+(defun aux-source-value (info environment)
+  (let* ((source (branch-info-iteration-source info))
+         (found-p nil)
+         (value nil))
+    (when source
+      (multiple-value-setq (value found-p)
+        (environment-value source environment)))
+    (cond (found-p value)
+          ((numberp source) source)
+          ((not (eq *iteration-sequence* :unbound))
+           *iteration-sequence*)
+          (t
+           (error "No iteration control value is available for branch ~S."
+                  (branch-info-name info))))))
+
+(defun aux-repeat-count (info environment)
+  (let ((value (aux-source-value info environment)))
+    (cond ((integerp value) value)
+          ((listp value) (length value))
+          ((vectorp value) (length value))
+          (t
+           (error "Branch ~S needs an integer or sequence repeat count, got ~S."
+                  (branch-info-name info) value)))))
+
+(defun aux-depth-limit (info environment)
+  (let ((value (if *recursion-limit*
+                   *recursion-limit*
+                   (aux-source-value info environment))))
+    (unless (integerp value)
+      (error "Branch ~S needs an integer recursion limit, got ~S."
+             (branch-info-name info) value))
+    value))
+
+(defun aux-storage-key (info environment)
+  (let* ((source (branch-info-iteration-source info))
+         (found-p nil)
+         (value nil))
+    (when source
+      (multiple-value-setq (value found-p)
+        (environment-value source environment)))
+    (cond (found-p value)
+          (source source)
+          (t (branch-info-name info)))))
+
 (defun evaluate-adi-call (adi-index arguments environment program)
-  (let* ((info (program-branch-info program (adi-symbol adi-index)))
-         (body (adf-program-adi program adi-index))
+  (let* ((branch (cons :adi adi-index))
+         (info (program-branch-info program branch))
+         (body (program-branch program branch))
          (argument-values
            (mapcar (lambda (argument)
                      (evaluate-adf-tree argument program
                                         :environment environment))
                    arguments))
          (sequence (coerce (adi-sequence info environment) 'list))
-         (state (initial-adi-state info argument-values)))
+         (state (initial-branch-state info argument-values)))
     (let ((*iteration-sequence* sequence))
       (loop for item in sequence
             for index from 0
             do (setf state
-                     (next-adi-state
+                     (next-branch-state
                       info
                       (multiple-value-list
                        (evaluate-adf-tree
                         body
                         program
                         :environment
-                        (adi-iteration-environment
+                        (aux-iteration-environment
                          info state item index)))))))
     state))
+
+(defun evaluate-adl-call (adl-index arguments environment program)
+  (let* ((branch (cons :adl adl-index))
+         (info (program-branch-info program branch))
+         (body (program-branch program branch))
+         (argument-values
+           (mapcar (lambda (argument)
+                     (evaluate-adf-tree argument program
+                                        :environment environment))
+                   arguments))
+         (count (aux-repeat-count info environment))
+         (state (initial-branch-state info argument-values)))
+    (let ((*iteration-sequence* (loop for index below count collect index)))
+      (loop for index below count
+            do (setf state
+                     (next-branch-state
+                      info
+                      (multiple-value-list
+                       (evaluate-adf-tree
+                        body
+                        program
+                        :environment
+                        (aux-iteration-environment
+                         info state state index)))))))
+    state))
+
+(defun evaluate-adr-call (adr-index arguments environment program)
+  (let* ((branch (cons :adr adr-index))
+         (info (program-branch-info program branch))
+         (body (program-branch program branch))
+         (argument-values
+           (mapcar (lambda (argument)
+                     (evaluate-adf-tree argument program
+                                        :environment environment))
+                   arguments))
+         (state (initial-branch-state info argument-values))
+         (limit (aux-depth-limit info environment))
+         (depth *recursion-depth*))
+    (if (>= depth limit)
+        state
+        (let ((*recursion-depth* (1+ depth))
+              (*recursion-limit* limit))
+          (next-branch-state
+           info
+           (multiple-value-list
+            (evaluate-adf-tree
+             body
+             program
+             :environment
+             (aux-iteration-environment info state depth depth))))))))
+
+(defun evaluate-ads-call (ads-index arguments environment program)
+  (let* ((branch (cons :ads ads-index))
+         (info (program-branch-info program branch))
+         (body (program-branch program branch))
+         (argument-values
+           (mapcar (lambda (argument)
+                     (evaluate-adf-tree argument program
+                                        :environment environment))
+                   arguments))
+         (key (aux-storage-key info environment))
+         (cells (or *storage-cells*
+                    (setf *storage-cells* (make-hash-table :test #'equal))))
+         (initial (initial-branch-state info argument-values)))
+    (multiple-value-bind (current found-p)
+        (gethash key cells)
+      (unless found-p
+        (setf current initial
+              (gethash key cells) initial))
+      (let ((state
+              (next-branch-state
+               info
+               (multiple-value-list
+                (evaluate-adf-tree
+                 body
+                 program
+                 :environment
+                 (aux-iteration-environment
+                  info current current 0))))))
+        (setf (gethash key cells) state)
+        state))))
+
+(defun evaluate-aux-call (kind index arguments environment program)
+  (ecase kind
+    (:adi (evaluate-adi-call index arguments environment program))
+    (:adl (evaluate-adl-call index arguments environment program))
+    (:adr (evaluate-adr-call index arguments environment program))
+    (:ads (evaluate-ads-call index arguments environment program))))
 
 (defun argument-bindings (values)
   (loop for value in values
@@ -187,36 +340,38 @@
 (defun evaluate-adf-tree (tree program &key environment)
   "Evaluates TREE in the context of PROGRAM.
 
-   ENVIRONMENT is an alist of terminal or argument bindings.  ADF and
-   ADI calls are resolved against PROGRAM by branch index.  ADF and ADI
-   bodies use lexical scope: they see only their formal arguments and,
-   for ADIs, the current iteration element and index."
+    ENVIRONMENT is an alist of terminal or argument bindings.  ADF and
+    auxiliary calls are resolved against PROGRAM by branch index.  Branch
+    bodies use lexical scope: they see only their formal arguments and,
+    for auxiliary branches, their iteration or storage bindings."
   (cond
     ((consp tree)
      (let ((operator (first tree))
            (arguments (rest tree)))
-       (multiple-value-bind (adf-index adf-call-p)
-           (adf-call-index operator program)
-         (multiple-value-bind (adi-index adi-call-p)
-             (adi-call-index operator program)
-           (cond
-             (adf-call-p
-              (let* ((argument-values
-                       (mapcar (lambda (argument)
-                                 (evaluate-adf-tree
-                                  argument program
-                                  :environment environment))
-                               arguments))
-                     (adf-environment
-                       (argument-bindings argument-values)))
-                (evaluate-adf-tree (adf-program-adf program adf-index)
-                                   program
-                                   :environment adf-environment)))
-             (adi-call-p
-              (evaluate-adi-call adi-index arguments environment program))
-             (t
-              (evaluate-function-call
-               operator arguments environment program)))))))
+        (multiple-value-bind (adf-index adf-call-p)
+            (adf-call-index operator program)
+          (multiple-value-bind (aux-kind aux-index aux-call-p)
+              (aux-call-index operator program)
+            (cond
+              (adf-call-p
+               (let* ((argument-values
+                        (mapcar (lambda (argument)
+                                  (evaluate-adf-tree
+                                   argument program
+                                   :environment environment))
+                                arguments))
+                      (adf-environment
+                        (argument-bindings argument-values)))
+                 (evaluate-adf-tree (adf-program-adf program adf-index)
+                                    program
+                                    :environment adf-environment)))
+              (aux-call-p
+               (evaluate-aux-call aux-kind aux-index arguments
+                                  environment program))
+              (t
+               (evaluate-function-call
+                operator arguments environment program)))))))
+
     ((symbolp tree)
      (cond ((eq tree t) t)
            ((eq tree nil) nil)

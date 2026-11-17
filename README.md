@@ -11,11 +11,12 @@ Darwinian Invention and Problem Solving*.
 
 ### Status
 
-Phases 1-10 are complete: the fixed-architecture base, the six
+Phases 1-11 are complete: the fixed-architecture base, the six
 architecture-altering operations, point-typed crossover, the
 architecture-altering run loop, the design documentation, the optional
 synchronous island model, mixed Boolean/number point typing, the ADI core
-with ADI creation/deletion, and ADL/ADR/ADS auxiliary branches are in place.
+with ADI creation/deletion, ADL/ADR/ADS auxiliary branches, and a GPPS-style
+architecture decision entry point are in place.
 
 - Kernel with an arbitrary architecture of
   **ADF0 … ADF(N-1) + ADI0 … ADI(M-1) + RPB** (result-producing branch),
@@ -42,16 +43,17 @@ with ADI creation/deletion, and ADL/ADR/ADS auxiliary branches are in place.
   with three hierarchical ADFs, **even-5-parity-n-adfs** with a
   configurable number of ADFs, **even-5-parity-architecture-altering**
    with Koza's evolutionary architecture, **mixed-typed-regression** with a
-   Boolean ADF and a numeric ADF, and **auxiliary-branches** with ADL, ADR,
-   and ADS branches.
+   Boolean ADF and a numeric ADF, **auxiliary-branches** with ADL, ADR,
+   and ADS branches, and **gpps-architecture-altering** with GPPS-style
+   per-generation architecture decisions.
 - Parallel fitness evaluation and initial-population generation through
   `lparallel`, with deterministic results independent of worker count.
 - The six architecture-altering operations from Koza III: branch
   duplication, argument duplication, branch creation, argument creation,
   branch deletion, and argument deletion. The four duplication/creation
-  operations preserve program semantics; deletion operations regenerate
-  affected references. Two additional ADI operations, `adi-creation` and
-  `adi-deletion`, add and remove iteration-defining branches.
+   operations preserve program semantics; deletion operations regenerate
+   affected references. Creation, deletion, and duplication are also
+   available for ADI, ADL, ADR, and ADS branches.
 - Structure-preserving crossover with point typing over `:boolean` and
   `:number`, including typed ADF calls.
 - Typed initial generation for full, grow, and ramped-half-and-half runs,
@@ -635,6 +637,22 @@ Verify the known program and run a small evolutionary smoke test with:
 
 The known program reports zero standardized fitness and one hit.
 
+### Example: GPPS-style architecture decisions
+
+The `gpps-architecture-altering` example starts with no auxiliary branches and
+uses `run-gpps-system`. Its policy rotates ADL, ADR, and ADS creation by
+generation, while auxiliary branch specs supply body-generation templates and
+maximum branch counts keep the architecture bounded:
+
+```lisp
+(asdf:load-system "cl-koza-3/examples/gpps-architecture-altering")
+
+(cl-koza-3.examples.gpps-architecture-altering:run-example
+ :maximum-generations 6
+ :size-of-population 40
+ :seed 1.0)
+```
+
 ### Architecture-altering operations
 
 The architecture-altering operations are exported from `cl-koza-3`.
@@ -651,17 +669,35 @@ Each returns a new program, or `NIL` when the operation is not applicable:
              iteration-source iteration-variable
              iteration-index-variable iteration-item-type)
 (adi-deletion program &key branch)
+(adl-creation program &key branch point body
+             iteration-source iteration-variable
+             iteration-index-variable iteration-item-type)
+(adr-creation program &key branch point body
+             iteration-source iteration-variable
+             iteration-index-variable iteration-item-type)
+(ads-creation program &key branch point body
+             iteration-source iteration-variable
+             iteration-index-variable iteration-item-type)
+(adl-deletion program &key branch)
+(adr-deletion program &key branch)
+(ads-deletion program &key branch)
+(adi-branch-duplication program &key branch)
+(adl-branch-duplication program &key branch)
+(adr-branch-duplication program &key branch)
+(ads-branch-duplication program &key branch)
 ```
 
 Branch duplication, argument duplication, branch creation, argument creation,
-and `adi-creation` preserve the value returned by the program. `adi-creation`
-replaces the selected subtree with a call to a new ADI whose state argument is
-that subtree; its optional body defaults to generated code or `arg0`.
-Branch deletion, argument deletion, and `adi-deletion` regenerate affected
-references at random and can change the program's value. `adi-deletion`
-renumbers later ADIs and updates their calls and metadata. Typed deletion
-regeneration receives temporary program metadata, so replacement subtrees may
-contain ADF calls.
+and all auxiliary `*-creation` operations preserve the value returned by the
+program. Creation replaces the selected subtree with a call to a new auxiliary
+branch whose state argument is that subtree; its optional body defaults to
+generated code or `arg0` when a template is available, and otherwise to
+`arg0`. Branch deletion, argument deletion, and all auxiliary `*-deletion`
+operations regenerate affected references at random and can change the
+program's value. Deletion renumbers later branches of the same auxiliary
+family and updates their calls and metadata. Typed deletion regeneration
+receives temporary program metadata, so replacement subtrees may contain ADF
+calls.
 
 Point-typed crossover inserts a fragment from one program into a branch of
 another program. The fragment is checked against the receiving branch's
@@ -692,6 +728,16 @@ values as `run-adf-system`. The operation fractions are dynamic variables:
 - `*argument-deletion-fraction*`
 - `*adi-creation-fraction*`
 - `*adi-deletion-fraction*`
+- `*adi-branch-duplication-fraction*`
+- `*adl-creation-fraction*`
+- `*adl-deletion-fraction*`
+- `*adl-branch-duplication-fraction*`
+- `*adr-creation-fraction*`
+- `*adr-deletion-fraction*`
+- `*adr-branch-duplication-fraction*`
+- `*ads-creation-fraction*`
+- `*ads-deletion-fraction*`
+- `*ads-branch-duplication-fraction*`
 
 ADI-aware runs use `run-adi-architecture-altering-system`. Its problem
 function returns the same seven values as `run-adi-system`, including ADI
@@ -699,7 +745,22 @@ specs. ADI creation uses the iteration metadata of the first initial ADI spec
 when one is available, and can be customized with
 `*adi-creation-iteration-source*`, `*adi-creation-iteration-variable*`,
 `*adi-creation-iteration-index-variable*`, and
-`*adi-creation-iteration-item-type*`.
+`*adi-creation-iteration-item-type*`. ADL, ADR, and ADS creation use the same
+defaults with their own variables, or a branch spec from
+`*gpps-aux-spec-templates*`.
+
+#### GPPS-style architecture decisions
+
+`run-gpps-system` accepts a `gpps-problem` and provides a lightweight version
+of Koza III's generically programmed problem-solving (GPPS) workflow. It binds
+all architecture fractions around the run, applies the problem's
+`:architecture-fractions`, calls the `:architecture-policy` once per breeding
+generation as `(lambda (generation population) ...)`, and returns whatever
+`run-system` returns. A policy may return a plist such as
+`(:adl-creation-fraction 0.03 :adl-deletion-fraction 0.01)`; fraction names
+with and without the trailing `-fraction` are accepted. The
+`:maximum-branch-counts` option bounds each auxiliary family through
+`*gpps-maximum-branch-counts*`.
 
 The crossover fractions total the fraction of offspring produced by
 point-typed crossover. When an architecture-altering operation cannot be
@@ -769,7 +830,7 @@ The test suite uses FiveAM and is registered as `cl-koza-3/tests`:
 At the time of writing the suite reports:
 
 ```text
-Pass: 3439 (100%)
+Pass: 3466 (100%)
 Skip: 0 ( 0%)
 Fail: 0 ( 0%)
 ```
@@ -803,6 +864,9 @@ covered by active tests.
   runs, nested ADI evaluation, and the `adi-architecture-altering` example.
 - **Phase 10 (done):** ADL/ADR/ADS branch representation, evaluation, run
   entries, tests, and the `auxiliary-branches` example.
+- **Phase 11 (done):** auxiliary branch creation/deletion/duplication,
+  GPPS-style architecture decisions, tests, and the
+  `gpps-architecture-altering` example.
 
 ### Project layout
 

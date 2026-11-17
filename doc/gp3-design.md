@@ -20,19 +20,22 @@ subroutines:
 It also provides structure-preserving crossover with point typing over
 `:boolean` and `:number`, typed ADF calls, an automatically defined iteration
 (ADI) core, ADL/ADR/ADS auxiliary branches, and run entry points,
-`run-architecture-altering-system` and
-`run-adi-architecture-altering-system`, that use the operation fractions from
-Koza's Boolean even-5-parity run.
+`run-architecture-altering-system`, `run-adi-architecture-altering-system`, and
+`run-gpps-system`, that use the operation fractions from Koza's Boolean
+even-5-parity run.
 
 The ADI core iterates each ADI over an external sequence and exposes the
 current element and zero-based index. ADL repeats a body a control count of
 times, ADR recurses to a caller-supplied depth limit, and ADS reads and
 updates mutable cells. The architecture-altering operations preserve all
 auxiliary bodies and update calls and metadata when ADF branches change.
-`adi-creation` replaces a selected subtree with a call to a new ADI and uses
-that subtree as the new ADI's initial state. `adi-deletion` removes an ADI,
-regenerates calls to it, and renumbers later ADIs and their metadata. The
-implementation does not include the GPPS, analog circuit,
+Creation replaces a selected subtree with a call to a new ADI, ADL, ADR, or
+ADS branch and uses that subtree as the new branch's initial state. Deletion
+removes a branch, regenerates calls to it, and renumbers later branches of the
+same family and their metadata. Duplication appends a copy of a branch and
+randomly redirects some calls. `run-gpps-system` adds a lightweight GPPS-style
+entry point with per-generation architecture policies and templates. The
+implementation does not include the full GPPS, analog circuit,
 evolvable-hardware, or biology material from the books.
 
 ## Program representation
@@ -258,6 +261,32 @@ iteration metadata fields; ADL interprets the source as a repeat count,
 ADR as a depth limit, and ADS as a storage-cell key. The `auxiliary-branches`
 example verifies a hand-built program that exercises all three families.
 
+### GPPS-style policies
+
+`run-gpps-system` takes a `gpps-problem` instead of a multi-valued problem
+function. The struct carries the five branch-spec lists, the RPB spec, the
+four run-control callables, auxiliary body templates, initial architecture
+fractions, an architecture policy, and maximum branch counts. The function
+coerces a function or symbol to a `gpps-problem`, validates the branch specs,
+initializes the run, and binds every architecture fraction dynamically before
+calling `cl-koza-3.kernel::run-system` with the architecture-aware breeder.
+
+The problem's `:architecture-fractions` plist is applied after the defaults.
+The `:architecture-policy` is called once before each breeding generation as
+`(funcall policy generation population)`. Its returned plist overrides the
+fractions for that generation, so architecture decisions can depend on the
+current generation and population. Names such as `:adl-creation` and
+`:adl-creation-fraction` are aliases. The policy may also return
+`:maximum-branch-counts` with a plist such as `(:adl 2 :adr 2 :ads 2)`.
+
+Auxiliary creation uses `:aux-templates` from the problem first, then the
+metadata of an existing branch of the same family, then the family-specific
+`*ad*-creation-*` defaults. Templates are ordinary `branch-spec` objects and
+are resolved to `branch-info` records through the kernel's spec resolution
+functions. Creation and duplication honor `*gpps-maximum-branch-counts*`.
+The `gpps-architecture-altering` example rotates the active family by
+generation and uses templates and maximum counts to keep runs bounded.
+
 ## Island model
 
 Runs use a single population when `*number-of-demes*` is `1`. For an
@@ -321,9 +350,10 @@ single-run illustration, not an estimate of success probability.
 
 - The implemented point types are `:boolean` and `:number`; this is not the
   full Koza type hierarchy.
-- ADI creation adds a one-state-formal branch from an existing subtree. ADI
-  deletion regenerates calls to the removed branch, so it can change program
-  behavior and can leave new ADI bodies with a reduced function set.
+- Auxiliary creation adds a one-state-formal branch from an existing subtree.
+  Auxiliary deletion regenerates calls to the removed branch, so it can change
+  program behavior and can leave new auxiliary bodies with a reduced function
+  set.
 - ADI iteration sequences, ADL counts, ADR depth limits, and ADS cell names
   are supplied through the caller's environment; the kernel does not evolve
   sequence constructors, loop bounds, or storage-cell constructors.
@@ -338,6 +368,9 @@ single-run illustration, not an estimate of success probability.
 - Mutation is not used in the architecture-altering example, although typed
   mutation is implemented and tested. If the configured fractions leave a
   remainder, the remainder is filled by reproduction.
+- GPPS-style policies are ordinary Lisp functions called before breeding. The
+  implementation does not provide Koza's declarative GPPS decision language
+  or evolve the policies themselves.
 - Operation applicability depends on the selected program's architecture.
   Duplication, creation, and deletion operations fall back to reproduction
   when the selected program lacks the required ADF or formal argument.

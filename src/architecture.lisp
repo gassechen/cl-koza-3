@@ -41,6 +41,78 @@
 (defvar *adi-creation-iteration-item-type* :number
   "Type assigned to the iteration element when a new ADI is created.")
 
+(defvar *adi-branch-duplication-fraction* 0.0
+  "Fraction of each generation produced by ADI duplication.")
+
+(defvar *adl-branch-duplication-fraction* 0.0
+  "Fraction of each generation produced by ADL duplication.")
+
+(defvar *adr-branch-duplication-fraction* 0.0
+  "Fraction of each generation produced by ADR duplication.")
+
+(defvar *ads-branch-duplication-fraction* 0.0
+  "Fraction of each generation produced by ADS duplication.")
+
+(defvar *adl-creation-fraction* 0.0
+  "Fraction of each generation produced by ADL creation.")
+
+(defvar *adl-deletion-fraction* 0.0
+  "Fraction of each generation produced by ADL deletion.")
+
+(defvar *adr-creation-fraction* 0.0
+  "Fraction of each generation produced by ADR creation.")
+
+(defvar *adr-deletion-fraction* 0.0
+  "Fraction of each generation produced by ADR deletion.")
+
+(defvar *ads-creation-fraction* 0.0
+  "Fraction of each generation produced by ADS creation.")
+
+(defvar *ads-deletion-fraction* 0.0
+  "Fraction of each generation produced by ADS deletion.")
+
+(defvar *adl-creation-iteration-source* :count
+  "Default repeat-count source for an ADL created without metadata.")
+
+(defvar *adl-creation-iteration-variable* :item
+  "Default iteration element variable for newly created ADLs.")
+
+(defvar *adl-creation-iteration-index-variable* :index
+  "Default iteration index variable for newly created ADLs.")
+
+(defvar *adl-creation-iteration-item-type* :number
+  "Type assigned to the iteration element when a new ADL is created.")
+
+(defvar *adr-creation-iteration-source* :limit
+  "Default recursion-limit source for an ADR created without metadata.")
+
+(defvar *adr-creation-iteration-variable* :level
+  "Default recursion depth variable for newly created ADRs.")
+
+(defvar *adr-creation-iteration-index-variable* :depth
+  "Default iteration index variable for newly created ADRs.")
+
+(defvar *adr-creation-iteration-item-type* :number
+  "Type assigned to the recursion depth when a new ADR is created.")
+
+(defvar *ads-creation-iteration-source* :cell
+  "Default storage-cell source for an ADS created without metadata.")
+
+(defvar *ads-creation-iteration-variable* :value
+  "Default storage value variable for newly created ADSs.")
+
+(defvar *ads-creation-iteration-index-variable* :address
+  "Default iteration index variable for newly created ADSs.")
+
+(defvar *ads-creation-iteration-item-type* :number
+  "Type assigned to the storage value when a new ADS is created.")
+
+(defvar *gpps-aux-spec-templates* nil
+  "Alist mapping auxiliary branch kinds to BRANCH-SPEC templates.")
+
+(defvar *gpps-maximum-branch-counts* nil
+  "Alist mapping auxiliary branch kinds to maximum family sizes.")
+
 (defun same-symbol-name-p (left right)
   (and (symbolp left)
        (symbolp right)
@@ -86,6 +158,69 @@
 
 (defun adi-symbol (index &optional (package :keyword))
   (aux-symbol :adi index package))
+
+(defun aux-branch-symbol-p (kind symbol)
+  (let ((index (aux-symbol-index symbol)))
+    (and index (eq (car index) kind))))
+
+(defun aux-branch-symbol-index (kind symbol)
+  (let ((index (aux-symbol-index symbol)))
+    (when (and index (eq (car index) kind))
+      (cdr index))))
+
+(defun aux-creation-default (kind variable)
+  (ecase kind
+    (:adi
+     (ecase variable
+       (:source *adi-creation-iteration-source*)
+       (:item *adi-creation-iteration-variable*)
+       (:index *adi-creation-iteration-index-variable*)
+       (:type *adi-creation-iteration-item-type*)))
+    (:adl
+     (ecase variable
+       (:source *adl-creation-iteration-source*)
+       (:item *adl-creation-iteration-variable*)
+       (:index *adl-creation-iteration-index-variable*)
+       (:type *adl-creation-iteration-item-type*)))
+    (:adr
+     (ecase variable
+       (:source *adr-creation-iteration-source*)
+       (:item *adr-creation-iteration-variable*)
+       (:index *adr-creation-iteration-index-variable*)
+       (:type *adr-creation-iteration-item-type*)))
+    (:ads
+     (ecase variable
+       (:source *ads-creation-iteration-source*)
+       (:item *ads-creation-iteration-variable*)
+       (:index *ads-creation-iteration-index-variable*)
+       (:type *ads-creation-iteration-item-type*)))))
+
+(defun set-aux-creation-default (kind variable value)
+  (ecase kind
+    (:adi
+     (ecase variable
+       (:source (setf *adi-creation-iteration-source* value))
+       (:item (setf *adi-creation-iteration-variable* value))
+       (:index (setf *adi-creation-iteration-index-variable* value))
+       (:type (setf *adi-creation-iteration-item-type* value))))
+    (:adl
+     (ecase variable
+       (:source (setf *adl-creation-iteration-source* value))
+       (:item (setf *adl-creation-iteration-variable* value))
+       (:index (setf *adl-creation-iteration-index-variable* value))
+       (:type (setf *adl-creation-iteration-item-type* value))))
+    (:adr
+     (ecase variable
+       (:source (setf *adr-creation-iteration-source* value))
+       (:item (setf *adr-creation-iteration-variable* value))
+       (:index (setf *adr-creation-iteration-index-variable* value))
+       (:type (setf *adr-creation-iteration-item-type* value))))
+    (:ads
+     (ecase variable
+       (:source (setf *ads-creation-iteration-source* value))
+       (:item (setf *ads-creation-iteration-variable* value))
+       (:index (setf *ads-creation-iteration-index-variable* value))
+       (:type (setf *ads-creation-iteration-item-type* value))))))
 
 (defun argument-symbol (index &optional (package :keyword))
   (intern (format nil "ARG~D" index) (or package :keyword)))
@@ -336,23 +471,41 @@
                  (vector info)
                  (subseq infos adf-info-count))))
 
+(defun aux-info-family-start (infos kind)
+  (let ((order (cl-koza-3.program::aux-branch-kind-order kind)))
+    (unless order
+      (error "~S is not an auxiliary branch kind." kind))
+    (+ (count-if (lambda (branch-info)
+                   (eq (branch-info-kind branch-info) :adf))
+                 infos)
+       (loop for branch-info across infos
+             for other-kind = (branch-info-kind branch-info)
+             for other-order = (and other-kind
+                                    (cl-koza-3.program::aux-branch-kind-order
+                                     other-kind))
+             when (and other-order (< other-order order))
+               count 1))))
+
+(defun aux-info-family-count (infos kind)
+  (count-if (lambda (branch-info)
+              (eq (branch-info-kind branch-info) kind))
+            infos))
+
+(defun aux-info-family-index (infos kind family-index)
+  (+ (aux-info-family-start infos kind) family-index))
+
+(defun aux-body-family-index (infos kind family-index)
+  (let ((adf-count
+          (count-if (lambda (info)
+                      (eq (branch-info-kind info) :adf))
+                    infos)))
+    (+ (- (aux-info-family-start infos kind) adf-count) family-index)))
+
 (defun insert-aux-info (infos info)
   (let* ((kind (branch-info-kind info))
-         (order (or (cl-koza-3.program::aux-branch-kind-order kind) 0))
-         (adf-info-count
-           (count-if (lambda (branch-info)
-                       (eq (branch-info-kind branch-info) :adf))
-                     infos))
          (insertion-index
-           (+ adf-info-count
-              (loop for branch-info across infos
-                    for other-kind = (branch-info-kind branch-info)
-                    for other-order =
-                      (and other-kind
-                           (cl-koza-3.program::aux-branch-kind-order
-                            other-kind))
-                    when (and other-order (< other-order order))
-                      count 1))))
+           (+ (aux-info-family-start infos kind)
+              (aux-info-family-count infos kind))))
     (concatenate 'vector
                  (subseq infos 0 insertion-index)
                  (vector info)
@@ -972,7 +1125,27 @@
       terminal-set
       (append terminal-set (list terminal))))
 
-(defun adi-creation (program
+(defun aux-template-info (kind)
+  (let ((spec (getf *gpps-aux-spec-templates* kind)))
+    (when spec
+      (let* ((copy (cl-koza-3.kernel::copy-branch-spec spec))
+             (resolved (cl-koza-3.kernel::resolve-branch-spec copy 1)))
+        (cl-koza-3.kernel::resolve-terminal-sets nil resolved nil)
+        (cl-koza-3.kernel::make-branch-info-for-resolved
+         resolved (aux-symbol kind 0 :keyword) kind nil)))))
+
+(defun aux-existing-info (program kind)
+  (find-if (lambda (info)
+             (eq (branch-info-kind info) kind))
+           (adf-program-branch-info program)))
+
+(defun aux-creation-allowed-p (kind program)
+  (let ((maximum (getf *gpps-maximum-branch-counts* kind)))
+    (or (null maximum)
+        (< (cl-koza-3.program::aux-kind-count program kind) maximum))))
+
+(defun aux-creation (program
+                     kind
                      &key
                        branch
                        point
@@ -980,18 +1153,19 @@
                        iteration-source
                        iteration-variable
                        iteration-index-variable
-                       (iteration-item-type
-                         *adi-creation-iteration-item-type*))
-  "Creates an automatically defined iteration from a subtree of PROGRAM.
+                       iteration-item-type)
+  "Creates an auxiliary branch of KIND from a subtree of PROGRAM.
 
-   The selected subtree becomes the initial state passed to the new ADI,
-   and its point is replaced by a call to the new ADI.  The new ADI has
-   one state formal.  BODY supplies its initial body; when omitted, a
-   body is generated from the source branch metadata, falling back to
-   ARG0 when generation is not possible."
+   The selected subtree becomes the initial state passed to the new
+   branch, and its point is replaced by a call to the new branch.  The
+   new branch has one state formal.  BODY supplies its initial body;
+   when omitted, a body is generated from the available metadata,
+   falling back to ARG0 when generation is not possible."
   (ensure-branch-metadata program)
+  (unless (aux-creation-allowed-p kind program)
+    (return-from aux-creation nil))
   (let* ((adf-count (adf-program-branch-count program))
-         (adi-count (adf-program-adi-count program))
+         (aux-count (cl-koza-3.program::aux-kind-count program kind))
          (source-index
            (if branch
                (normalize-branch-index program branch)
@@ -1004,63 +1178,76 @@
          (source-body (branch-body-at program source-index))
          (point-index (normalize-point source-body point))
          (source-info (branch-info-at program source-index))
-         (infos (adf-program-branch-info program))
-         (existing-adi-info
-           (find-if (lambda (info)
-                      (eq (branch-info-kind info) :adi))
-                    infos))
+         (existing-info (aux-existing-info program kind))
+         (template-info (aux-template-info kind))
+         (function-source-info (or template-info source-info))
+         (type-source-info (or template-info source-info))
          (wrapper (list (copy-tree source-body))))
     (multiple-value-bind (pointer fragment)
         (get-subtree (first wrapper) wrapper point-index)
       (unless pointer
-        (return-from adi-creation nil))
-      (let* (             (fragment-type
+        (return-from aux-creation nil))
+      (let* ((fragment-type
                (if (typed-branch-info-p source-info)
                    (or (typed-tree-type fragment source-info program)
                        (branch-info-result-type source-info))
                    (branch-info-result-type source-info)))
              (iteration-source
                (or iteration-source
-                   (and existing-adi-info
-                        (branch-info-iteration-source existing-adi-info))
-                   *adi-creation-iteration-source*))
+                   (and existing-info
+                        (branch-info-iteration-source existing-info))
+                   (and template-info
+                        (branch-info-iteration-source template-info))
+                   (aux-creation-default kind :source)))
              (iteration-variable
                (or iteration-variable
-                   (and existing-adi-info
-                        (branch-info-iteration-variable
-                         existing-adi-info))
-                   *adi-creation-iteration-variable*))
+                   (and existing-info
+                        (branch-info-iteration-variable existing-info))
+                   (and template-info
+                        (branch-info-iteration-variable template-info))
+                   (aux-creation-default kind :item)))
              (iteration-index-variable
                (or iteration-index-variable
-                   (and existing-adi-info
-                        (branch-info-iteration-index-variable
-                         existing-adi-info))
-                   *adi-creation-iteration-index-variable*))
+                   (and existing-info
+                        (branch-info-iteration-index-variable existing-info))
+                   (and template-info
+                        (branch-info-iteration-index-variable template-info))
+                   (aux-creation-default kind :index)))
              (iteration-item-type
-               (or (and existing-adi-info
-                        (typed-branch-info-p existing-adi-info)
+               (or (and existing-info
+                        (typed-branch-info-p existing-info)
                         (terminal-type
-                         existing-adi-info
-                         (branch-info-iteration-variable
-                          existing-adi-info)))
-                   iteration-item-type))
-             (new-index adi-count)
-             (new-name (adi-symbol new-index :keyword))
+                         existing-info
+                         (branch-info-iteration-variable existing-info)))
+                   (and template-info
+                        (typed-branch-info-p template-info)
+                        (terminal-type
+                         template-info
+                         (branch-info-iteration-variable template-info)))
+                   iteration-item-type
+                   (aux-creation-default kind :type)))
+             (new-index aux-count)
+             (new-name (aux-symbol kind new-index :keyword))
              (constants
-               (constant-terminal-set
-                (branch-info-terminal-set source-info)))
+               (if template-info
+                   (copy-list (branch-info-terminal-set template-info))
+                   (constant-terminal-set
+                    (branch-info-terminal-set source-info))))
+             (generated-terminals
+               (list :arg0 iteration-variable iteration-index-variable))
              (terminal-set
                (reduce (lambda (set terminal)
                          (add-terminal-by-name terminal set))
-                       (list :arg0 iteration-variable
-                             iteration-index-variable)
+                       generated-terminals
                        :initial-value (copy-list constants)))
              (terminal-types
-               (when (typed-branch-info-p source-info)
+               (when (typed-branch-info-p type-source-info)
                  (append
                   (loop for entry in
-                          (branch-info-terminal-types source-info)
-                        when (name-member-p (car entry) constants)
+                          (branch-info-terminal-types type-source-info)
+                        when (and (name-member-p (car entry) constants)
+                                  (not (name-member-p
+                                        (car entry) generated-terminals)))
                           collect (copy-tree entry))
                   (list (cons :arg0 fragment-type)
                         (cons iteration-variable iteration-item-type)
@@ -1068,26 +1255,27 @@
              (new-info
                (make-branch-info
                 :name new-name
-                :kind :adi
+                :kind kind
                 :arity 1
                 :formals '(:arg0)
                 :function-set
-                (copy-list (branch-info-function-set source-info))
+                (copy-list (branch-info-function-set function-source-info))
                 :function-argument-map
-                (copy-list (branch-info-function-argument-map source-info))
+                (copy-list
+                 (branch-info-function-argument-map function-source-info))
                 :function-types
-                (copy-tree (branch-info-function-types source-info))
+                (copy-tree (branch-info-function-types function-source-info))
                 :terminal-set terminal-set
                 :terminal-types terminal-types
                 :result-type fragment-type
                 :allowed-branch-indices
                 (copy-list
-                 (branch-info-allowed-branch-indices source-info))
+                 (branch-info-allowed-branch-indices function-source-info))
                 :iteration-source iteration-source
                 :iteration-variable iteration-variable
                 :iteration-index-variable iteration-index-variable)))
         (unless fragment-type
-          (return-from adi-creation nil))
+          (return-from aux-creation nil))
         (let ((new-body
                 (or (and body (copy-tree body))
                     (when (can-generate-subtree-p new-info program)
@@ -1101,7 +1289,7 @@
                      (not (eq (typed-tree-type new-body
                                                new-info program)
                               fragment-type)))
-            (return-from adi-creation nil))
+            (return-from aux-creation nil))
           (setf (first pointer)
                 (list new-name (copy-tree fragment)))
           (let ((new-infos (copy-branch-infos program)))
@@ -1125,9 +1313,64 @@
               (make-operation-program
                new-adfs
                new-rpb
-               (insert-adi-info new-infos new-info)
-                (cl-koza-3.program::aux-insert-body
-                 new-adis program :adi new-index new-body)))))))))
+               (insert-aux-info new-infos new-info)
+               (cl-koza-3.program::aux-insert-body
+                new-adis program kind new-index new-body)))))))))
+
+(defun adi-creation (program
+                     &key
+                       branch
+                       point
+                       body
+                       iteration-source
+                       iteration-variable
+                       iteration-index-variable
+                       (iteration-item-type
+                         *adi-creation-iteration-item-type*))
+  (aux-creation program :adi
+                :branch branch
+                :point point
+                :body body
+                :iteration-source iteration-source
+                :iteration-variable iteration-variable
+                :iteration-index-variable iteration-index-variable
+                :iteration-item-type iteration-item-type))
+
+(defun adl-creation (program &key branch point body iteration-source
+                                  iteration-variable iteration-index-variable
+                                  iteration-item-type)
+  (aux-creation program :adl
+                :branch branch
+                :point point
+                :body body
+                :iteration-source iteration-source
+                :iteration-variable iteration-variable
+                :iteration-index-variable iteration-index-variable
+                :iteration-item-type iteration-item-type))
+
+(defun adr-creation (program &key branch point body iteration-source
+                                  iteration-variable iteration-index-variable
+                                  iteration-item-type)
+  (aux-creation program :adr
+                :branch branch
+                :point point
+                :body body
+                :iteration-source iteration-source
+                :iteration-variable iteration-variable
+                :iteration-index-variable iteration-index-variable
+                :iteration-item-type iteration-item-type))
+
+(defun ads-creation (program &key branch point body iteration-source
+                                  iteration-variable iteration-index-variable
+                                  iteration-item-type)
+  (aux-creation program :ads
+                :branch branch
+                :point point
+                :body body
+                :iteration-source iteration-source
+                :iteration-variable iteration-variable
+                :iteration-index-variable iteration-index-variable
+                :iteration-item-type iteration-item-type))
 
 (defun set-point (body point new-value)
   (let ((wrapper (list (copy-tree body))))
@@ -1403,40 +1646,41 @@
                                 new-infos
                                 new-adis)))))
 
-(defun tree-contains-adi-call-p (tree index)
+(defun tree-contains-aux-call-p (tree kind index)
   (cond ((consp tree)
-         (or (eql (adi-symbol-index (car tree)) index)
+         (or (eql (aux-branch-symbol-index kind (car tree)) index)
              (some (lambda (argument)
-                     (tree-contains-adi-call-p argument index))
+                     (tree-contains-aux-call-p argument kind index))
                    (cdr tree))))
         (t nil)))
 
-(defun operation-adi-branch-index (program branch)
-  (cond ((null branch)
-         (when (plusp (adf-program-adi-count program))
-           (random-integer (adf-program-adi-count program))))
-        (t
-         (let ((index (branch-index branch)))
-           (when (and (consp index)
-                      (eq (car index) :adi)
-                      (< (cdr index) (adf-program-adi-count program)))
-             (cdr index))))))
+(defun operation-aux-branch-index (program kind branch)
+  (let ((count (cl-koza-3.program::aux-kind-count program kind)))
+    (cond ((null branch)
+           (when (plusp count)
+             (random-integer count)))
+          (t
+           (let ((index (branch-index branch)))
+             (when (and (consp index)
+                        (eq (car index) kind)
+                        (< (cdr index) count))
+               (cdr index)))))))
 
-(defun adjust-adi-symbol-for-deletion (symbol deleted-index)
-  (let ((index (adi-symbol-index symbol)))
+(defun adjust-aux-symbol-for-deletion (kind symbol deleted-index)
+  (let ((index (aux-branch-symbol-index kind symbol)))
     (cond ((null index) symbol)
           ((= index deleted-index) nil)
           ((> index deleted-index)
-           (adi-symbol (1- index) (symbol-package symbol)))
+           (aux-symbol kind (1- index) (symbol-package symbol)))
           (t symbol))))
 
-(defun adjust-function-set-for-adi-deletion (info deleted-index)
+(defun adjust-function-set-for-aux-deletion (info kind deleted-index)
   (let ((new-functions nil)
         (new-argument-map nil))
     (loop for function in (branch-info-function-set info)
           for arity in (branch-info-function-argument-map info)
-          for adjusted = (adjust-adi-symbol-for-deletion
-                          function deleted-index)
+          for adjusted = (adjust-aux-symbol-for-deletion
+                          kind function deleted-index)
           when adjusted
             do (push adjusted new-functions)
                (push arity new-argument-map))
@@ -1446,47 +1690,44 @@
       (setf (branch-info-function-types info)
             (loop for entry in (branch-info-function-types info)
                   for function = (first entry)
-                  for adjusted = (adjust-adi-symbol-for-deletion
-                                  function deleted-index)
+                  for adjusted = (adjust-aux-symbol-for-deletion
+                                  kind function deleted-index)
                   when adjusted
                     collect (cons adjusted (copy-list (rest entry))))))
     info))
 
-(defun adjust-info-for-adi-deletion (info deleted-index)
+(defun adjust-info-for-aux-deletion (info kind deleted-index)
   (let ((copy (copy-branch-info info))
-        (index (adi-symbol-index (branch-info-name info))))
+        (index (aux-branch-symbol-index kind (branch-info-name info))))
     (setf (branch-info-name copy)
-          (if (and (eq (branch-info-kind info) :adi)
+          (if (and (eq (branch-info-kind info) kind)
                    index
                    (> index deleted-index))
-              (adi-symbol (1- index)
+              (aux-symbol kind (1- index)
                           (symbol-package (branch-info-name info)))
               (branch-info-name info)))
-    (adjust-function-set-for-adi-deletion copy deleted-index)
+    (adjust-function-set-for-aux-deletion copy kind deleted-index)
     copy))
 
-(defun remove-adi-info (infos deleted-index)
-  (let* ((adf-count
-           (count-if (lambda (info)
-                       (eq (branch-info-kind info) :adf))
-                     infos))
-         (deleted-info-index (+ adf-count deleted-index))
+(defun remove-aux-info (infos kind deleted-family-index)
+  (let* ((deleted-info-index
+           (aux-info-family-index infos kind deleted-family-index))
          (new-infos (make-array (1- (length infos))))
          (new-index 0))
     (loop for old-index below (length infos)
           unless (= old-index deleted-info-index)
             do (setf (aref new-infos new-index)
-                     (adjust-info-for-adi-deletion
-                      (aref infos old-index) deleted-index))
+                     (adjust-info-for-aux-deletion
+                      (aref infos old-index) kind deleted-family-index))
                (incf new-index))
     new-infos))
 
-(defun delete-adi-calls-in-tree
-    (tree deleted-index info program expected-type generation-program)
+(defun delete-aux-calls-in-tree
+    (tree kind deleted-index info program expected-type generation-program)
   (cond
     ((consp tree)
      (let* ((operator (car tree))
-            (call-index (adi-symbol-index operator)))
+            (call-index (aux-branch-symbol-index kind operator)))
        (cond
          ((eql call-index deleted-index)
           (generate-random-subtree-of-type
@@ -1498,105 +1739,201 @@
           (let* ((new-operator
                    (if (and call-index
                             (> call-index deleted-index))
-                       (adi-symbol
+                       (aux-symbol
+                        kind
                         (1- call-index)
                         (symbol-package operator))
                        operator))
                  (argument-types
                    (function-argument-types-in-info
                     info operator program)))
-            (cons new-operator
-                  (loop for argument in (cdr tree)
-                        for type in argument-types
-                        collect (delete-adi-calls-in-tree
-                                 argument deleted-index info
-                                 program type
-                                 generation-program))))))))
+             (cons new-operator
+                   (loop for argument in (cdr tree)
+                         for type in argument-types
+                         collect (delete-aux-calls-in-tree
+                                  argument kind deleted-index info
+                                  program type
+                                  generation-program))))))))
     (t tree)))
 
-(defun adi-deletion (program &key branch)
-  "Deletes one ADI from PROGRAM, regenerating calls to it at random.
-   Later ADI branches are renumbered and their calls are updated."
+(defun aux-deletion (program kind &key branch)
+  "Deletes one auxiliary branch of KIND from PROGRAM, regenerating calls
+   to it at random.  Later branches in the family are renumbered and
+   their calls are updated."
   (ensure-branch-metadata program)
-  (when (zerop (adf-program-adi-count program))
-    (return-from adi-deletion nil))
-  (let* ((deleted-index
-           (or (operation-adi-branch-index program branch)
-               (return-from adi-deletion nil)))
+  (when (zerop (cl-koza-3.program::aux-kind-count program kind))
+    (return-from aux-deletion nil))
+  (let* ((deleted-family-index
+           (or (operation-aux-branch-index program kind branch)
+               (return-from aux-deletion nil)))
          (adf-count (adf-program-branch-count program))
-          (adi-count (adf-program-adi-count program))
-          (infos (adf-program-branch-info program))
-          (new-infos (remove-adi-info infos deleted-index))
-          (generation-program
-            (make-operation-program
-             (make-array adf-count :initial-element nil)
-             nil
-             new-infos
-             (make-array (1- (adf-program-aux-count program))
-                         :initial-element nil))))
-    (labels ((new-adi-index (old-index)
-               (if (< old-index deleted-index)
-                   old-index
-                   (1- old-index)))
-             (new-adi-info-index (old-index)
-               (+ adf-count (new-adi-index old-index))))
-      (loop for adf-index below adf-count
-            for info = (aref new-infos adf-index)
-            when (and (tree-contains-adi-call-p
-                       (adf-program-adf program adf-index)
-                       deleted-index)
-                      (not (can-generate-subtree-p
-                            info generation-program)))
-              do (return-from adi-deletion nil))
-      (loop for old-index below adi-count
-            unless (= old-index deleted-index)
-              do (let ((info (aref new-infos
-                                   (new-adi-info-index old-index))))
-                   (when (and (tree-contains-adi-call-p
-                               (adf-program-adi program old-index)
-                               deleted-index)
+         (infos (adf-program-branch-info program))
+         (deleted-raw-index
+           (aux-info-family-index infos kind deleted-family-index))
+         (new-infos (remove-aux-info infos kind deleted-family-index))
+         (generation-program
+           (make-operation-program
+            (make-array adf-count :initial-element nil)
+            nil
+            new-infos
+            (make-array (1- (adf-program-aux-count program))
+                        :initial-element nil))))
+    (labels ((new-family-index (other-kind index)
+               (cond ((not (eq other-kind kind)) index)
+                     ((< index deleted-family-index) index)
+                     (t (1- index)))))
+      (loop for raw-index below (adf-program-work-branch-count program)
+            unless (= raw-index deleted-raw-index)
+              do (let ((info (aref new-infos raw-index)))
+                   (when (and (tree-contains-aux-call-p
+                               (branch-body-at program raw-index)
+                               kind deleted-family-index)
                               (not (can-generate-subtree-p
                                     info generation-program)))
-                     (return-from adi-deletion nil))))
-      (let ((rpb-info (aref new-infos (1- (length new-infos)))))
-        (when (and (tree-contains-adi-call-p
-                    (adf-program-rpb program) deleted-index)
-                   (not (can-generate-subtree-p
-                         rpb-info generation-program)))
-          (return-from adi-deletion nil)))
+                     (return-from aux-deletion nil))))
       (let ((new-adfs (make-array adf-count))
             (new-adis
               (cl-koza-3.program::aux-remove-body
-               (adf-program-adis program) program :adi deleted-index)))
+               (adf-program-adis program) program kind deleted-family-index)))
         (loop for adf-index below adf-count
               for info = (aref new-infos adf-index)
               do (setf (aref new-adfs adf-index)
-                       (delete-adi-calls-in-tree
+                       (delete-aux-calls-in-tree
                         (adf-program-adf program adf-index)
-                        deleted-index info program
+                        kind deleted-family-index info program
                         (branch-info-result-type info)
                         generation-program)))
-        (loop for old-index below adi-count
-              unless (= old-index deleted-index)
-                do (let ((new-index (new-adi-index old-index))
-                         (info (aref new-infos
-                                     (new-adi-info-index old-index))))
-                     (setf (aref new-adis new-index)
-                           (delete-adi-calls-in-tree
-                            (adf-program-adi program old-index)
-                            deleted-index info program
-                            (branch-info-result-type info)
-                            generation-program))))
+        (dolist (other-kind cl-koza-3.program::*aux-branch-kinds*)
+          (loop for family-index
+                  below (cl-koza-3.program::aux-kind-count program other-kind)
+                unless (and (eq other-kind kind)
+                            (= family-index deleted-family-index))
+                  do (let* ((new-family-index
+                              (new-family-index other-kind family-index))
+                            (info
+                              (aref new-infos
+                                    (aux-info-family-index
+                                     new-infos other-kind new-family-index)))
+                            (old-body-index
+                              (aux-body-family-index infos other-kind
+                                                     family-index))
+                            (new-body-index
+                              (aux-body-family-index new-infos other-kind
+                                                     new-family-index)))
+                       (setf (aref new-adis new-body-index)
+                             (delete-aux-calls-in-tree
+                              (adf-program-aux program old-body-index)
+                              kind deleted-family-index info program
+                              (branch-info-result-type info)
+                              generation-program)))))
         (let ((rpb-info (aref new-infos (1- (length new-infos)))))
           (make-operation-program
            new-adfs
-           (delete-adi-calls-in-tree
+           (delete-aux-calls-in-tree
             (adf-program-rpb program)
-            deleted-index rpb-info program
+            kind deleted-family-index rpb-info program
             (branch-info-result-type rpb-info)
             generation-program)
            new-infos
            new-adis))))))
+
+(defun adi-deletion (program &key branch)
+  (aux-deletion program :adi :branch branch))
+
+(defun adl-deletion (program &key branch)
+  (aux-deletion program :adl :branch branch))
+
+(defun adr-deletion (program &key branch)
+  (aux-deletion program :adr :branch branch))
+
+(defun ads-deletion (program &key branch)
+  (aux-deletion program :ads :branch branch))
+
+(defun duplicate-aux-info (info kind new-index)
+  (let ((copy (copy-branch-info info)))
+    (setf (branch-info-name copy)
+          (aux-symbol kind new-index (symbol-package (branch-info-name info))))
+    copy))
+
+(defun extend-info-with-duplicated-aux (info kind old-index new-index source-info)
+  (let ((old-name (aux-symbol kind old-index :keyword))
+        (new-name (aux-symbol kind new-index :keyword)))
+    (when (function-set-index info old-name)
+      (add-function-entry info new-name 1)
+      (let* ((entry (function-type-entry source-info old-name))
+             (result-type (or (and entry (second entry))
+                              (branch-info-result-type source-info)))
+             (argument-types (or (and entry (cddr entry))
+                                 (list result-type))))
+        (add-function-type info new-name result-type argument-types)))
+    info))
+
+(defun duplicate-aux-calls-in-tree (tree kind old-index new-index)
+  (if (consp tree)
+      (let* ((operator (car tree))
+             (arguments
+               (mapcar (lambda (argument)
+                         (duplicate-aux-calls-in-tree
+                          argument kind old-index new-index))
+                       (cdr tree))))
+        (if (and (eql (aux-branch-symbol-index kind operator) old-index)
+                 (zerop (random-integer 2)))
+            (cons (aux-symbol kind new-index (symbol-package operator))
+                  arguments)
+            (cons operator arguments)))
+      tree))
+
+(defun aux-branch-duplication (program kind &key branch)
+  (ensure-branch-metadata program)
+  (unless (aux-creation-allowed-p kind program)
+    (return-from aux-branch-duplication nil))
+  (let* ((family-index (operation-aux-branch-index program kind branch))
+         (infos (adf-program-branch-info program)))
+    (unless family-index
+      (return-from aux-branch-duplication nil))
+    (let* ((new-family-index
+             (cl-koza-3.program::aux-kind-count program kind))
+           (source-raw-index
+             (aux-info-family-index infos kind family-index))
+           (source-info (aref infos source-raw-index))
+           (new-info (duplicate-aux-info source-info kind new-family-index))
+           (new-infos (copy-branch-infos program)))
+      (loop for info across new-infos
+            do (extend-info-with-duplicated-aux
+                info kind family-index new-family-index source-info))
+      (let ((new-program
+              (make-operation-program
+               (map 'vector #'copy-tree (adf-program-adfs program))
+               (copy-tree (adf-program-rpb program))
+               new-infos
+               (map 'vector #'copy-tree (adf-program-adis program)))))
+        (loop for raw-index below (adf-program-work-branch-count program)
+              do (set-branch-body-at
+                  new-program raw-index
+                  (if (= raw-index source-raw-index)
+                      (copy-tree (branch-body-at program raw-index))
+                      (duplicate-aux-calls-in-tree
+                       (branch-body-at program raw-index)
+                       kind family-index new-family-index))))
+        (make-operation-program
+         (adf-program-adfs new-program)
+         (adf-program-rpb new-program)
+         (insert-aux-info new-infos new-info)
+         (cl-koza-3.program::aux-insert-body
+          (adf-program-adis new-program) program kind
+          new-family-index (copy-tree (branch-body-at program source-raw-index))))))))
+
+(defun adi-branch-duplication (program &key branch)
+  (aux-branch-duplication program :adi :branch branch))
+
+(defun adl-branch-duplication (program &key branch)
+  (aux-branch-duplication program :adl :branch branch))
+
+(defun adr-branch-duplication (program &key branch)
+  (aux-branch-duplication program :adr :branch branch))
+
+(defun ads-branch-duplication (program &key branch)
+  (aux-branch-duplication program :ads :branch branch))
 
 (defun build-formal-renamings (old-formals deleted-index new-formals)
   (loop for old-formal in old-formals
@@ -1889,28 +2226,38 @@
          (reproduction-end
            (+ crossover-end
               *fitness-proportionate-reproduction-fraction*))
-         (branch-duplication-end
-           (+ reproduction-end *branch-duplication-fraction*))
-         (argument-duplication-end
-           (+ branch-duplication-end *argument-duplication-fraction*))
-         (branch-deletion-end
-           (+ argument-duplication-end *branch-deletion-fraction*))
-         (argument-deletion-end
-           (+ branch-deletion-end *argument-deletion-fraction*))
-         (branch-creation-end
-           (+ argument-deletion-end *branch-creation-fraction*))
-         (argument-creation-end
-           (+ branch-creation-end *argument-creation-fraction*))
-         (adi-deletion-end
-           (+ argument-creation-end *adi-deletion-fraction*))
-         (adi-creation-end
-           (+ adi-deletion-end *adi-creation-fraction*)))
+         (operations
+           (list
+            (list *branch-duplication-fraction* #'branch-duplication)
+            (list *argument-duplication-fraction* #'argument-duplication)
+            (list *branch-deletion-fraction* #'branch-deletion)
+            (list *argument-deletion-fraction* #'argument-deletion)
+            (list *branch-creation-fraction* #'branch-creation)
+            (list *argument-creation-fraction* #'argument-creation)
+            (list *adi-branch-duplication-fraction* #'adi-branch-duplication)
+            (list *adi-deletion-fraction* #'adi-deletion)
+            (list *adi-creation-fraction* #'adi-creation)
+            (list *adl-branch-duplication-fraction* #'adl-branch-duplication)
+            (list *adl-deletion-fraction* #'adl-deletion)
+            (list *adl-creation-fraction* #'adl-creation)
+            (list *adr-branch-duplication-fraction* #'adr-branch-duplication)
+            (list *adr-deletion-fraction* #'adr-deletion)
+            (list *adr-creation-fraction* #'adr-creation)
+            (list *ads-branch-duplication-fraction* #'ads-branch-duplication)
+            (list *ads-deletion-fraction* #'ads-deletion)
+            (list *ads-creation-fraction* #'ads-creation))))
     (labels ((selected-program ()
                (cl-koza-3.kernel::find-individual population))
              (unary-operation (operation)
                (let ((program (selected-program)))
                  (or (funcall operation program)
-                     (copy-adf-program program)))))
+                     (copy-adf-program program))))
+             (operation-for-fraction (fraction)
+               (loop with end = reproduction-end
+                     for (operation-fraction operation) in operations
+                     do (incf end operation-fraction)
+                     when (< fraction end)
+                       return operation)))
       (loop with index = 0
             while (< index size)
             do (let ((fraction (/ index size)))
@@ -1928,41 +2275,12 @@
                     (setf (aref new-programs index)
                           (copy-adf-program (selected-program)))
                     (incf index))
-                   ((< fraction branch-duplication-end)
-                    (setf (aref new-programs index)
-                          (unary-operation #'branch-duplication))
-                    (incf index))
-                   ((< fraction argument-duplication-end)
-                    (setf (aref new-programs index)
-                          (unary-operation #'argument-duplication))
-                    (incf index))
-                   ((< fraction branch-deletion-end)
-                    (setf (aref new-programs index)
-                          (unary-operation #'branch-deletion))
-                    (incf index))
-                   ((< fraction argument-deletion-end)
-                    (setf (aref new-programs index)
-                          (unary-operation #'argument-deletion))
-                    (incf index))
-                   ((< fraction branch-creation-end)
-                    (setf (aref new-programs index)
-                          (unary-operation #'branch-creation))
-                    (incf index))
-                   ((< fraction argument-creation-end)
-                    (setf (aref new-programs index)
-                          (unary-operation #'argument-creation))
-                    (incf index))
-                   ((< fraction adi-deletion-end)
-                    (setf (aref new-programs index)
-                          (unary-operation #'adi-deletion))
-                    (incf index))
-                   ((< fraction adi-creation-end)
-                    (setf (aref new-programs index)
-                          (unary-operation #'adi-creation))
-                    (incf index))
                    (t
-                    (setf (aref new-programs index)
-                          (copy-adf-program (selected-program)))
+                    (let ((operation (operation-for-fraction fraction)))
+                      (setf (aref new-programs index)
+                            (if operation
+                                (unary-operation operation)
+                                (copy-adf-program (selected-program)))))
                     (incf index))))))
     (dotimes (index size)
       (setf (individual-program (aref population index))
@@ -1980,7 +2298,17 @@
         (cons "Argument deletion fraction"
               *argument-deletion-fraction*)
         (cons "ADI creation fraction" *adi-creation-fraction*)
-        (cons "ADI deletion fraction" *adi-deletion-fraction*)))
+        (cons "ADI deletion fraction" *adi-deletion-fraction*)
+        (cons "ADI duplication fraction" *adi-branch-duplication-fraction*)
+        (cons "ADL creation fraction" *adl-creation-fraction*)
+        (cons "ADL deletion fraction" *adl-deletion-fraction*)
+        (cons "ADL duplication fraction" *adl-branch-duplication-fraction*)
+        (cons "ADR creation fraction" *adr-creation-fraction*)
+        (cons "ADR deletion fraction" *adr-deletion-fraction*)
+        (cons "ADR duplication fraction" *adr-branch-duplication-fraction*)
+        (cons "ADS creation fraction" *ads-creation-fraction*)
+        (cons "ADS deletion fraction" *ads-deletion-fraction*)
+        (cons "ADS duplication fraction" *ads-branch-duplication-fraction*)))
 
 (defun run-architecture-altering-system (problem-function
                                          seed
@@ -2061,5 +2389,204 @@
        fitness-function
        parameter-definer
        termination-predicate
-       :adi-specs adi-specs
-       :breeding-function #'breed-architecture-altering-population))))
+        :adi-specs adi-specs
+        :breeding-function #'breed-architecture-altering-population))))
+
+(defstruct gpps-problem
+  "Complete problem description for a GPPS-style run."
+  adf-specs
+  adi-specs
+  adl-specs
+  adr-specs
+  ads-specs
+  rpb-spec
+  fitness-cases-creator
+  fitness-function
+  parameter-definer
+  termination-predicate
+  aux-templates
+  architecture-fractions
+  architecture-policy
+  maximum-branch-counts)
+
+(defun set-architecture-fraction (name value)
+  (ecase name
+    ((:branch-duplication :branch-duplication-fraction)
+     (setf *branch-duplication-fraction* value))
+    ((:argument-duplication :argument-duplication-fraction)
+     (setf *argument-duplication-fraction* value))
+    ((:branch-deletion :branch-deletion-fraction)
+     (setf *branch-deletion-fraction* value))
+    ((:argument-deletion :argument-deletion-fraction)
+     (setf *argument-deletion-fraction* value))
+    ((:branch-creation :branch-creation-fraction)
+     (setf *branch-creation-fraction* value))
+    ((:argument-creation :argument-creation-fraction)
+     (setf *argument-creation-fraction* value))
+    ((:adi-creation :adi-creation-fraction)
+     (setf *adi-creation-fraction* value))
+    ((:adi-deletion :adi-deletion-fraction)
+     (setf *adi-deletion-fraction* value))
+    ((:adi-duplication :adi-branch-duplication-fraction)
+     (setf *adi-branch-duplication-fraction* value))
+    ((:adl-creation :adl-creation-fraction)
+     (setf *adl-creation-fraction* value))
+    ((:adl-deletion :adl-deletion-fraction)
+     (setf *adl-deletion-fraction* value))
+    ((:adl-duplication :adl-branch-duplication-fraction)
+     (setf *adl-branch-duplication-fraction* value))
+    ((:adr-creation :adr-creation-fraction)
+     (setf *adr-creation-fraction* value))
+    ((:adr-deletion :adr-deletion-fraction)
+     (setf *adr-deletion-fraction* value))
+    ((:adr-duplication :adr-branch-duplication-fraction)
+     (setf *adr-branch-duplication-fraction* value))
+    ((:ads-creation :ads-creation-fraction)
+     (setf *ads-creation-fraction* value))
+    ((:ads-deletion :ads-deletion-fraction)
+     (setf *ads-deletion-fraction* value))
+    ((:ads-duplication :ads-branch-duplication-fraction)
+     (setf *ads-branch-duplication-fraction* value))))
+
+(defun apply-architecture-fractions (settings)
+  (loop for (name value) on settings by #'cddr
+        unless (eq name :maximum-branch-counts)
+          do (set-architecture-fraction name value))
+  settings)
+
+(defun apply-aux-spec-defaults (kind spec)
+  (when spec
+    (dolist (variable '(:source :item :index))
+      (let ((value
+              (ecase variable
+                (:source (cl-koza-3.kernel::branch-spec-iteration-source spec))
+                (:item (cl-koza-3.kernel::branch-spec-iteration-variable spec))
+                (:index
+                  (cl-koza-3.kernel::branch-spec-iteration-index-variable
+                   spec)))))
+        (when value
+          (set-aux-creation-default kind variable value))))))
+
+(defun coerce-gpps-problem (problem)
+  (if (gpps-problem-p problem)
+      problem
+      (progn
+        (unless (or (functionp problem)
+                    (and (symbolp problem) (fboundp problem)))
+          (error "GPPS problem must be a GPPS-PROBLEM or a function."))
+        (multiple-value-bind (adf-specs adi-specs adl-specs adr-specs ads-specs
+                              rpb-spec fitness-cases-creator fitness-function
+                              parameter-definer termination-predicate)
+            (funcall problem)
+          (make-gpps-problem
+           :adf-specs adf-specs
+           :adi-specs adi-specs
+           :adl-specs adl-specs
+           :adr-specs adr-specs
+           :ads-specs ads-specs
+           :rpb-spec rpb-spec
+           :fitness-cases-creator fitness-cases-creator
+           :fitness-function fitness-function
+           :parameter-definer parameter-definer
+           :termination-predicate termination-predicate)))))
+
+(defun run-gpps-system (problem
+                        seed
+                        maximum-generations
+                        size-of-population
+                        &rest seeded-programs)
+  "Runs a GPPS-style problem in which ADFs and auxiliary branch families
+   may be created, duplicated and deleted during the run.  PROBLEM is a
+   GPPS-PROBLEM object or a function returning the ten values of
+   RUN-AUX-SYSTEM.  Architecture fractions and maximum family sizes may
+   be supplied by the problem or changed per generation by its
+   ARCHITECTURE-POLICY function."
+  (cl-koza-3.kernel::validate-run-arguments
+   #'identity seed maximum-generations size-of-population)
+  (let ((problem (coerce-gpps-problem problem)))
+    (cl-koza-3.kernel::validate-branch-specs
+     (gpps-problem-adf-specs problem)
+     (gpps-problem-rpb-spec problem)
+     (gpps-problem-adi-specs problem)
+     :adl-specs (gpps-problem-adl-specs problem)
+     :adr-specs (gpps-problem-adr-specs problem)
+     :ads-specs (gpps-problem-ads-specs problem))
+    (cl-koza-3.kernel::initialize-run seed)
+    (let* ((*gpps-aux-spec-templates*
+             (copy-list (gpps-problem-aux-templates problem)))
+           (*gpps-maximum-branch-counts*
+             (copy-list (gpps-problem-maximum-branch-counts problem)))
+           (*branch-duplication-fraction* *branch-duplication-fraction*)
+           (*argument-duplication-fraction* *argument-duplication-fraction*)
+           (*branch-deletion-fraction* *branch-deletion-fraction*)
+           (*argument-deletion-fraction* *argument-deletion-fraction*)
+           (*branch-creation-fraction* *branch-creation-fraction*)
+           (*argument-creation-fraction* *argument-creation-fraction*)
+           (*adi-creation-fraction* *adi-creation-fraction*)
+           (*adi-deletion-fraction* *adi-deletion-fraction*)
+           (*adi-branch-duplication-fraction* *adi-branch-duplication-fraction*)
+           (*adl-creation-fraction* *adl-creation-fraction*)
+           (*adl-deletion-fraction* *adl-deletion-fraction*)
+           (*adl-branch-duplication-fraction* *adl-branch-duplication-fraction*)
+           (*adr-creation-fraction* *adr-creation-fraction*)
+           (*adr-deletion-fraction* *adr-deletion-fraction*)
+           (*adr-branch-duplication-fraction* *adr-branch-duplication-fraction*)
+           (*ads-creation-fraction* *ads-creation-fraction*)
+           (*ads-deletion-fraction* *ads-deletion-fraction*)
+           (*ads-branch-duplication-fraction* *ads-branch-duplication-fraction*)
+           (*adi-creation-iteration-source* *adi-creation-iteration-source*)
+           (*adi-creation-iteration-variable* *adi-creation-iteration-variable*)
+           (*adi-creation-iteration-index-variable*
+             *adi-creation-iteration-index-variable*)
+           (*adi-creation-iteration-item-type* *adi-creation-iteration-item-type*)
+           (*adl-creation-iteration-source* *adl-creation-iteration-source*)
+           (*adl-creation-iteration-variable* *adl-creation-iteration-variable*)
+           (*adl-creation-iteration-index-variable*
+             *adl-creation-iteration-index-variable*)
+           (*adl-creation-iteration-item-type* *adl-creation-iteration-item-type*)
+           (*adr-creation-iteration-source* *adr-creation-iteration-source*)
+           (*adr-creation-iteration-variable* *adr-creation-iteration-variable*)
+           (*adr-creation-iteration-index-variable*
+             *adr-creation-iteration-index-variable*)
+           (*adr-creation-iteration-item-type* *adr-creation-iteration-item-type*)
+           (*ads-creation-iteration-source* *ads-creation-iteration-source*)
+           (*ads-creation-iteration-variable* *ads-creation-iteration-variable*)
+           (*ads-creation-iteration-index-variable*
+             *ads-creation-iteration-index-variable*)
+           (*ads-creation-iteration-item-type* *ads-creation-iteration-item-type*)
+           (generation 0))
+      (apply-architecture-fractions
+       (gpps-problem-architecture-fractions problem))
+      (apply-aux-spec-defaults :adi (first (gpps-problem-adi-specs problem)))
+      (apply-aux-spec-defaults :adl (first (gpps-problem-adl-specs problem)))
+      (apply-aux-spec-defaults :adr (first (gpps-problem-adr-specs problem)))
+      (apply-aux-spec-defaults :ads (first (gpps-problem-ads-specs problem)))
+      (let ((policy (gpps-problem-architecture-policy problem)))
+        (labels ((breed (population new-programs adf-branches rpb-branch)
+                   (incf generation)
+                   (when policy
+                     (let ((settings (funcall policy generation population)))
+                       (when settings
+                         (apply-architecture-fractions settings)
+                         (let ((maximums
+                                 (getf settings :maximum-branch-counts)))
+                           (when maximums
+                             (setf *gpps-maximum-branch-counts*
+                                   (copy-list maximums)))))))
+                   (breed-architecture-altering-population
+                    population new-programs adf-branches rpb-branch)))
+          (cl-koza-3.kernel::run-system
+           (gpps-problem-adf-specs problem)
+           (gpps-problem-rpb-spec problem)
+           maximum-generations
+           size-of-population
+           seeded-programs
+           (gpps-problem-fitness-cases-creator problem)
+           (gpps-problem-fitness-function problem)
+           (gpps-problem-parameter-definer problem)
+           (gpps-problem-termination-predicate problem)
+           :adi-specs (gpps-problem-adi-specs problem)
+           :adl-specs (gpps-problem-adl-specs problem)
+           :adr-specs (gpps-problem-adr-specs problem)
+           :ads-specs (gpps-problem-ads-specs problem)
+           :breeding-function #'breed))))))

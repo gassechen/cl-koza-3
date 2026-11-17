@@ -114,6 +114,19 @@
   :in-order-to ((test-op (test-op "cl-koza-3/tests"))))
 
 
+(defsystem "cl-koza-3/examples/gpps-architecture-altering"
+  :description "Koza III example: GPPS-style architecture-altering decisions"
+  :version "0.1.0"
+  :author "Gastón Novita"
+  :license "MIT License (see COPYING)"
+  :depends-on ("cl-koza-3")
+  :serial t
+  :components ((:module "examples"
+                 :serial t
+                 :components ((:file "gpps-architecture-altering"))))
+  :in-order-to ((test-op (test-op "cl-koza-3/tests"))))
+
+
 (defsystem "cl-koza-3/tests"
   :description "Test suite for cl-koza-3"
   :version "0.1.0"
@@ -128,6 +141,7 @@
                 "cl-koza-3/examples/adi-sequence-sum"
                 "cl-koza-3/examples/adi-architecture-altering"
                 "cl-koza-3/examples/auxiliary-branches"
+                "cl-koza-3/examples/gpps-architecture-altering"
                 "fiveam")
   :serial t
   :components ((:module "tests"
@@ -152,8 +166,9 @@
                              (:file "mixed-typed-regression-test")
                               (:file "adi-test")
                               (:file "adi-example-test")
-                              (:file "aux-test")
-                              (:file "aux-example-test")
+                               (:file "aux-test")
+                               (:file "aux-architecture-test")
+                               (:file "aux-example-test")
                               (:file "known-issues-test"))))
   :perform (test-op (op c)
              (unless (uiop:symbol-call :cl-koza-3.tests :run-tests)

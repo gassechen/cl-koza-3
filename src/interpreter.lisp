@@ -117,18 +117,19 @@
                    arguments))
          (sequence (coerce (adi-sequence info environment) 'list))
          (state (initial-adi-state info argument-values)))
-    (loop for item in sequence
-          for index from 0
-          do (setf state
-                   (next-adi-state
-                    info
-                    (multiple-value-list
-                     (evaluate-adf-tree
-                      body
-                      program
-                      :environment
-                      (adi-iteration-environment
-                       info state item index))))))
+    (let ((*iteration-sequence* sequence))
+      (loop for item in sequence
+            for index from 0
+            do (setf state
+                     (next-adi-state
+                      info
+                      (multiple-value-list
+                       (evaluate-adf-tree
+                        body
+                        program
+                        :environment
+                        (adi-iteration-environment
+                         info state item index)))))))
     state))
 
 (defun argument-bindings (values)

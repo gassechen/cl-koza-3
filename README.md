@@ -11,11 +11,11 @@ Darwinian Invention and Problem Solving*.
 
 ### Status
 
-Phases 1-7 are complete: the fixed-architecture base, the six
+Phases 1-9 are complete: the fixed-architecture base, the six
 architecture-altering operations, point-typed crossover, the
 architecture-altering run loop, the design documentation, the optional
-synchronous island model, mixed Boolean/number point typing, and the fixed
-ADI core are in place.
+synchronous island model, mixed Boolean/number point typing, and the ADI core
+with ADI creation/deletion are in place.
 
 - Kernel with an arbitrary architecture of
   **ADF0 … ADF(N-1) + ADI0 … ADI(M-1) + RPB** (result-producing branch),
@@ -25,9 +25,10 @@ ADI core are in place.
   branch kind, arity, formal arguments, function set, function argument map,
   terminal set, function and terminal types, result type, and allowed
   hierarchical references.
-- Fixed automatically defined iterations (**ADI0 … ADI(M-1)**) that iterate
-  over an external sequence. An ADI body sees its state formals, the current
-  element, and the zero-based iteration index.
+- Automatically defined iterations (**ADI0 … ADI(M-1)**) that iterate over
+  an external sequence. An ADI body sees its state formals, the current
+  element, and the zero-based iteration index. ADI branches can be created
+  and deleted during architecture-altering runs.
 - ADF and ADI calls use lexical scope: a called body sees only its formal
   arguments and, for ADIs, the iteration bindings, not the caller's
   environment.
@@ -44,7 +45,8 @@ ADI core are in place.
   duplication, argument duplication, branch creation, argument creation,
   branch deletion, and argument deletion. The four duplication/creation
   operations preserve program semantics; deletion operations regenerate
-  affected references.
+  affected references. Two additional ADI operations, `adi-creation` and
+  `adi-deletion`, add and remove iteration-defining branches.
 - Structure-preserving crossover with point typing over `:boolean` and
   `:number`, including typed ADF calls.
 - Typed initial generation for full, grow, and ramped-half-and-half runs,
@@ -299,10 +301,11 @@ binding is absent, the call falls back to the dynamic variable
 iteration binds the current element and its zero-based index. The ADI
 returns the final state.
 
-ADI branches are fixed: `run-adi-system` creates them, and the six
-architecture-altering operations preserve them while updating ADI calls and
-metadata as ADFs are added or removed. The operations do not create or delete
-ADI branches themselves.
+`run-adi-system` creates a fixed set of ADI branches. The ADI-aware
+architecture-altering operations preserve ADIs while updating ADI calls and
+metadata as ADFs are added or removed, and `adi-creation`/`adi-deletion` can
+also change the number of ADI branches. A nested ADI call inside an ADI body
+reuses the enclosing ADI's iteration sequence through `*iteration-sequence*`.
 
 `run-genetic-programming-system` is the compatibility wrapper for the
 legacy two-ADF contract. Its `problem-function` returns ten values:
@@ -508,7 +511,7 @@ reverse.
 
 ### Example: summing a sequence with an ADI
 
-The `adi-sequence-sum` example exercises the fixed ADI core. `ADI0` iterates
+The `adi-sequence-sum` example exercises the ADI core. `ADI0` iterates
 over a sequence supplied in the fitness environment, and the target includes
 both the current element and its zero-based index. The expected value for a
 sequence is:
@@ -545,9 +548,22 @@ evolutionary smoke test with:
 
 The known program reports zero standardized fitness and six hits.
 
+The `adi-architecture-altering` example reuses this problem with
+`run-adi-architecture-altering-system`, allowing ADI branches to appear and
+disappear during the run:
+
+```lisp
+(asdf:load-system "cl-koza-3/examples/adi-architecture-altering")
+
+(cl-koza-3.examples.adi-architecture-altering:run-example
+ :maximum-generations 10
+ :size-of-population 100
+ :seed 1.0)
+```
+
 ### Architecture-altering operations
 
-The six architecture-altering operations are exported from `cl-koza-3`.
+The architecture-altering operations are exported from `cl-koza-3`.
 Each returns a new program, or `NIL` when the operation is not applicable:
 
 ```lisp
@@ -557,13 +573,21 @@ Each returns a new program, or `NIL` when the operation is not applicable:
 (argument-creation program &key branch point)
 (branch-deletion program &key branch)
 (argument-deletion program &key branch argument)
+(adi-creation program &key branch point body
+             iteration-source iteration-variable
+             iteration-index-variable iteration-item-type)
+(adi-deletion program &key branch)
 ```
 
-Branch duplication, argument duplication, branch creation, and argument
-creation preserve the value returned by the program. Branch deletion and
-argument deletion regenerate affected references at random and can change
-the program's value. Typed deletion regeneration receives temporary program
-metadata, so replacement subtrees may contain ADF calls.
+Branch duplication, argument duplication, branch creation, argument creation,
+and `adi-creation` preserve the value returned by the program. `adi-creation`
+replaces the selected subtree with a call to a new ADI whose state argument is
+that subtree; its optional body defaults to generated code or `arg0`.
+Branch deletion, argument deletion, and `adi-deletion` regenerate affected
+references at random and can change the program's value. `adi-deletion`
+renumbers later ADIs and updates their calls and metadata. Typed deletion
+regeneration receives temporary program metadata, so replacement subtrees may
+contain ADF calls.
 
 Point-typed crossover inserts a fragment from one program into a branch of
 another program. The fragment is checked against the receiving branch's
@@ -592,6 +616,16 @@ values as `run-adf-system`. The operation fractions are dynamic variables:
 - `*argument-creation-fraction*`
 - `*branch-deletion-fraction*`
 - `*argument-deletion-fraction*`
+- `*adi-creation-fraction*`
+- `*adi-deletion-fraction*`
+
+ADI-aware runs use `run-adi-architecture-altering-system`. Its problem
+function returns the same seven values as `run-adi-system`, including ADI
+specs. ADI creation uses the iteration metadata of the first initial ADI spec
+when one is available, and can be customized with
+`*adi-creation-iteration-source*`, `*adi-creation-iteration-variable*`,
+`*adi-creation-iteration-index-variable*`, and
+`*adi-creation-iteration-item-type*`.
 
 The crossover fractions total the fraction of offspring produced by
 point-typed crossover. When an architecture-altering operation cannot be
@@ -695,6 +729,8 @@ The two skipped tests document known issues:
   `adi-sequence-sum` example, and ADI branch generation/evaluation tests.
 - **Phase 8 (done):** architecture-altering operations that preserve ADIs,
   update ADI calls, and remap ADI/ADF metadata when ADF branches change.
+- **Phase 9 (done):** ADI creation/deletion, ADI-aware architecture-altering
+  runs, nested ADI evaluation, and the `adi-architecture-altering` example.
 
 ### Project layout
 

@@ -23,5 +23,17 @@
     (is (= 12 (length population)))
     (is (loop for index below (length population)
               for program = (individual-program (aref population index))
-              always (and (= 1 (adf-program-adi-count program))
-                          (= 2 (length (adf-program-branch-info program))))))))
+               always (and (= 1 (adf-program-adi-count program))
+                           (= 2 (length (adf-program-branch-info program))))))))
+
+(test adi-architecture-altering-run
+  (let ((*parallel-evaluation-p* nil)
+        (*parallel-generation-p* nil)
+        (population nil))
+    (capture-output
+     (setf population
+           (cl-koza-3.examples.adi-architecture-altering:run 2 8 1.0)))
+    (is (= 8 (length population)))
+    (is (loop for index below (length population)
+              always (adf-program-p
+                      (individual-program (aref population index)))))))

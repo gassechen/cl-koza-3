@@ -230,3 +230,47 @@
                                 (branch-info-name
                                  (aref (adf-program-branch-info program)
                                        1)))))))))
+
+(test adi-evaluation-supports-nested-adi-calls
+  (let* ((adi1-info
+           (make-branch-info
+            :name :adi1 :kind :adi :arity 1 :formals '(:arg0)
+            :function-set '(+) :function-argument-map '(2)
+            :function-types '((+ :number :number :number))
+            :terminal-set '(:arg0 :item :index)
+            :terminal-types '((:arg0 . :number) (:item . :number)
+                              (:index . :number))
+            :result-type :number
+            :iteration-source :data
+            :iteration-variable :item
+            :iteration-index-variable :index))
+         (adi0-info
+           (make-branch-info
+            :name :adi0 :kind :adi :arity 1 :formals '(:arg0)
+            :function-set '(adi1 +) :function-argument-map '(1 2)
+            :function-types '((adi1 :number :number)
+                              (+ :number :number :number))
+            :terminal-set '(:arg0 :item :index)
+            :terminal-types '((:arg0 . :number) (:item . :number)
+                              (:index . :number))
+            :result-type :number
+            :iteration-source :data
+            :iteration-variable :item
+            :iteration-index-variable :index))
+         (rpb-info
+           (make-branch-info
+            :name :rpb :kind :rpb :arity 0 :formals nil
+            :function-set '(adi0) :function-argument-map '(1)
+            :function-types '((adi0 :number :number))
+            :terminal-set '(0) :terminal-types '((0 . :number))
+            :result-type :number))
+         (program
+           (make-adf-program
+            :adfs nil
+            :adis (list '(+ arg0 (adi1 item)) '(+ arg0 item))
+            :rpb '(adi0 0)
+            :branch-info (vector adi0-info adi1-info rpb-info))))
+    (is (= 24
+           (evaluate-adf-program
+            program
+            :environment '((:data . (1 2 3))))))))

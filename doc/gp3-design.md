@@ -18,17 +18,20 @@ subroutines:
 6. argument deletion
 
 It also provides structure-preserving crossover with point typing over
-`:boolean` and `:number`, typed ADF calls, a fixed automatically defined
-iteration (ADI) core, and a run entry point,
-`run-architecture-altering-system`, that uses the operation fractions from
+`:boolean` and `:number`, typed ADF calls, an automatically defined iteration
+(ADI) core, and run entry points, `run-architecture-altering-system` and
+`run-adi-architecture-altering-system`, that use the operation fractions from
 Koza's Boolean even-5-parity run.
 
 The ADI core iterates each ADI over an external sequence and exposes the
 current element and zero-based index. The architecture-altering operations
-preserve ADIs and update ADI calls and metadata when ADF branches change, but
-they do not create or remove ADI branches. The implementation does not include
-loops, recursion, or storage (ADL, ADR, ADS), nor the GPPS, analog circuit,
-evolvable-hardware, or biology material from the books.
+preserve ADIs and update ADI calls and metadata when ADF branches change.
+`adi-creation` replaces a selected subtree with a call to a new ADI and uses
+that subtree as the new ADI's initial state. `adi-deletion` removes an ADI,
+regenerates calls to it, and renumbers later ADIs and their metadata. The
+implementation does not include loops, recursion, or storage (ADL, ADR, ADS),
+nor the GPPS, analog circuit, evolvable-hardware, or biology material from the
+books.
 
 ## Program representation
 
@@ -226,13 +229,19 @@ The run uses Koza's minimalist initial architecture for even-5-parity: one
 two-argument `ADF0` plus the result-producing branch. Branch creation can
 grow additional ADFs from either `ADF0` or the result-producing branch.
 
-`run-adi-system` is the separate entry point for the fixed ADI core. Its
-problem function returns ADF specs, ADI specs, the RPB spec, and the same
-four run-control values as `run-adf-system`. ADI specs carry
-`:iteration-source`, `:iteration-variable`, and `:iteration-index-variable`
-metadata. The iteration source is looked up in the caller's environment and
-falls back to `*iteration-sequence*`. ADI branches default to one state
-formal.
+`run-adi-system` is the entry point for a fixed ADI architecture. Its problem
+function returns ADF specs, ADI specs, the RPB spec, and the same four
+run-control values as `run-adf-system`. `run-adi-architecture-altering-system`
+uses the same seven-value contract with the architecture-altering breeder and
+the ADI fractions `*adi-creation-fraction*` and `*adi-deletion-fraction*`.
+
+ADI specs carry `:iteration-source`, `:iteration-variable`, and
+`:iteration-index-variable` metadata. The iteration source is looked up in the
+caller's environment and falls back to `*iteration-sequence*`. While an ADI
+body is evaluated, `*iteration-sequence*` is bound to the enclosing ADI's
+sequence, so nested ADI calls reuse it. ADI branches default to one state
+formal. ADI creation uses the metadata of the first initial ADI spec unless
+the dynamic creation defaults are overridden.
 
 ## Island model
 
@@ -297,9 +306,9 @@ single-run illustration, not an estimate of success probability.
 
 - The implemented point types are `:boolean` and `:number`; this is not the
   full Koza type hierarchy.
-- ADI branches are fixed. The six architecture-altering operations preserve
-  ADIs and update their calls and metadata when ADF branches change, but the
-  operations do not create or delete ADI branches.
+- ADI creation adds a one-state-formal branch from an existing subtree. ADI
+  deletion regenerates calls to the removed branch, so it can change program
+  behavior and can leave new ADI bodies with a reduced function set.
 - ADI iteration sequences are supplied externally; the kernel does not
   evolve sequence constructors, loop bounds, or storage. ADL, ADR, ADS, and
   recursion are not implemented.

@@ -307,7 +307,7 @@
         (*verbose* nil))
     (multiple-value-bind (population fitness-cases)
         (run-adi-architecture-altering-system
-         'adi-architecture-run-problem 1.0 1 4)
+         'adi-architecture-run-problem 1.0 2 4)
       (declare (ignore fitness-cases))
       (is (= 4 (length population)))
       (dotimes (index (length population))
@@ -322,7 +322,7 @@
         (*verbose* nil))
     (multiple-value-bind (population fitness-cases)
         (run-adi-architecture-altering-system
-         'adi-deletion-architecture-run-problem 1.0 1 4)
+         'adi-deletion-architecture-run-problem 1.0 2 4)
       (declare (ignore fitness-cases))
       (is (= 4 (length population)))
       (dotimes (index (length population))

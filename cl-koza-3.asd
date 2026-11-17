@@ -87,6 +87,18 @@
   :components ((:module "examples"
                 :serial t
                 :components ((:file "adi-sequence-sum"))))
+   :in-order-to ((test-op (test-op "cl-koza-3/tests"))))
+
+(defsystem "cl-koza-3/examples/adi-architecture-altering"
+  :description "Koza III example: architecture-altering runs with automatically defined iterations"
+  :version "0.1.0"
+  :author "Gastón Novita"
+  :license "MIT License (see COPYING)"
+  :depends-on ("cl-koza-3" "cl-koza-3/examples/adi-sequence-sum")
+  :serial t
+  :components ((:module "examples"
+                :serial t
+                :components ((:file "adi-architecture-altering"))))
   :in-order-to ((test-op (test-op "cl-koza-3/tests"))))
 
 
@@ -102,6 +114,7 @@
                "cl-koza-3/examples/even-5-parity-architecture-altering"
                "cl-koza-3/examples/mixed-typed-regression"
                "cl-koza-3/examples/adi-sequence-sum"
+               "cl-koza-3/examples/adi-architecture-altering"
                "fiveam")
   :serial t
   :components ((:module "tests"
